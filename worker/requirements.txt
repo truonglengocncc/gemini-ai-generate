@@ -1,0 +1,4 @@
+google-genai>=0.2.0
+runpod
+aiohttp>=3.9.0
+google-cloud-storage>=2.10.0
