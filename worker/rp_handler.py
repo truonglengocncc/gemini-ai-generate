@@ -9,6 +9,7 @@ import json
 import asyncio
 import aiohttp
 import time
+import io
 from typing import Dict, Any, List
 from google import genai
 from google.genai import types
@@ -79,6 +80,7 @@ async def handle_automatic_mode(input_data: Dict[str, Any]) -> Dict[str, Any]:
 
     config = input_data.get("config", {})
     num_variations = config.get("num_variations", 1)
+    resolution = config.get("resolution")  # Get resolution from config (for gemini-3-pro-image-preview)
     gcs_config = input_data.get("gcs_config")
     job_id = input_data.get("job_id", "")
     
@@ -99,7 +101,9 @@ async def handle_automatic_mode(input_data: Dict[str, Any]) -> Dict[str, Any]:
     if not api_key:
         return {"status": "failed", "error": "Missing GEMINI_API_KEY", "results": [], "total": 0}
     
-    model_name = input_data.get("model", "gemini-2.5-flash-image")
+    # Get model from input_data first, then from config, then default
+    model_name = input_data.get("model") or config.get("model") or "gemini-3-pro-image-preview"
+    print(f"[Automatic] Using model: {model_name}")
     
     async def process_image(idx: int, image_url: str):
         try:
@@ -107,7 +111,7 @@ async def handle_automatic_mode(input_data: Dict[str, Any]) -> Dict[str, Any]:
             image_results = []
             for variation in range(num_variations):
                 # Generate Image
-                generated_image = await generate_image_async(image_bytes, prompt, api_key, model_name)
+                generated_image = await generate_image_async(image_bytes, prompt, api_key, model_name, resolution)
                 
                 if gcs_client and gcs_config:
                     timestamp = int(time.time() * 1000)
@@ -168,6 +172,7 @@ async def handle_semi_automatic_mode(input_data: Dict[str, Any]) -> Dict[str, An
     
     config = input_data.get("config", {})
     images_per_prompt = config.get("images_per_prompt", {})
+    resolution = config.get("resolution")  # Get resolution from config (for gemini-3-pro-image-preview)
     gcs_config = input_data.get("gcs_config")
     job_id = input_data.get("job_id", "")
     
@@ -188,7 +193,9 @@ async def handle_semi_automatic_mode(input_data: Dict[str, Any]) -> Dict[str, An
     if not api_key:
         return {"status": "failed", "error": "Missing GEMINI_API_KEY", "results": [], "total": 0}
     
-    model_name = input_data.get("model", "gemini-2.5-flash-image")
+    # Get model from input_data first, then from config, then default
+    model_name = input_data.get("model") or config.get("model") or "gemini-3-pro-image-preview"
+    print(f"[Semi-Auto] Using model: {model_name}")
     
     async def process_image_prompt(img_idx: int, image_url: str):
         try:
@@ -205,7 +212,7 @@ async def handle_semi_automatic_mode(input_data: Dict[str, Any]) -> Dict[str, An
                 
                 async def generate_for_prompt(gen_idx: int):
                     try:
-                        generated_image = await generate_image_async(image_bytes, prompt, api_key, model_name)
+                        generated_image = await generate_image_async(image_bytes, prompt, api_key, model_name, resolution)
                         
                         if gcs_client and gcs_config:
                             timestamp = int(time.time() * 1000)
@@ -256,17 +263,18 @@ async def handle_semi_automatic_mode(input_data: Dict[str, Any]) -> Dict[str, An
 #                            Gemini Generation Logic                           #
 # ---------------------------------------------------------------------------- #
 
-async def generate_image_async(image_bytes: bytes, prompt: str, api_key: str = None, model_name: str = "gemini-2.5-flash-image") -> bytes:
+async def generate_image_async(image_bytes: bytes, prompt: str, api_key: str = None, model_name: str = "gemini-3-pro-image-preview", resolution: str = None) -> bytes:
     if not api_key:
         api_key = os.environ.get("GEMINI_API_KEY")
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, generate_image_sync, image_bytes, prompt, api_key, model_name)
+    return await loop.run_in_executor(None, generate_image_sync, image_bytes, prompt, api_key, model_name, resolution)
 
 
-def generate_image_sync(image_bytes: bytes, prompt: str, api_key: str, model_name: str = "gemini-2.5-flash-image") -> bytes:
+def generate_image_sync(image_bytes: bytes, prompt: str, api_key: str, model_name: str = "gemini-3-pro-image-preview", resolution: str = None) -> bytes:
     """
     Synchronous Gemini API call
     Supports multiple Gemini image generation models
+    For gemini-3-pro-image-preview, supports resolution: "1K", "2K", "4K"
     """
     # Validate prompt không rỗng (safety check)
     if not prompt or not prompt.strip():
@@ -285,14 +293,41 @@ def generate_image_sync(image_bytes: bytes, prompt: str, api_key: str, model_nam
         ),
     ]
     
+    # Configure image settings for gemini-3-pro-image-preview
+    image_config = None
+    is_gemini_3_pro = model == "gemini-3-pro-image-preview"
+    
+    if is_gemini_3_pro:
+        # For gemini-3-pro-image-preview, always set image_config
+        # Use provided resolution or default to 1K
+        if resolution:
+            # Validate resolution (must be uppercase K)
+            valid_resolutions = ["1K", "2K", "4K"]
+            if resolution.upper() not in valid_resolutions:
+                print(f"[Gemini] Warning: Invalid resolution '{resolution}', using default '1K'")
+                resolution = "1K"
+            else:
+                resolution = resolution.upper()  # Ensure uppercase K
+        else:
+            resolution = "1K"  # Default resolution
+            print(f"[Gemini] No resolution specified, using default '1K' for model {model}")
+        
+        image_config = types.ImageConfig(
+            aspect_ratio="1:1",  # Default aspect ratio, can be customized later
+            image_size=resolution
+        )
+        print(f"[Gemini] Using resolution: {resolution} for model {model}")
+    
+    # Request both IMAGE and TEXT modalities as per documentation
+    # The model will return both, but we prioritize image data
     generate_content_config = types.GenerateContentConfig(
-        response_modalities=[
-            "IMAGE",
-            "TEXT",
-        ],
+        response_modalities=["IMAGE", "TEXT"],
+        image_config=image_config if image_config else None,
     )
     
     image_data = None
+    all_text_responses = []
+    all_chunks_data = []
     print(f"[Gemini] Processing with model '{model}', prompt: {prompt[:100]}...")
 
     try:
@@ -301,31 +336,128 @@ def generate_image_sync(image_bytes: bytes, prompt: str, api_key: str, model_nam
             contents=contents,
             config=generate_content_config,
         ):
-            if not chunk.candidates or not chunk.candidates[0].content or not chunk.candidates[0].content.parts:
-                continue
+            # Collect full chunk data for debugging
+            chunk_info = {
+                "has_candidates": bool(chunk.candidates),
+                "candidates_count": len(chunk.candidates) if chunk.candidates else 0,
+            }
             
-            part = chunk.candidates[0].content.parts[0]
+            if chunk.candidates and len(chunk.candidates) > 0:
+                candidate = chunk.candidates[0]
+                chunk_info["candidate_finish_reason"] = getattr(candidate, "finish_reason", None)
+                chunk_info["candidate_safety_ratings"] = getattr(candidate, "safety_ratings", None)
+                
+                if candidate.content and candidate.content.parts:
+                    chunk_info["parts_count"] = len(candidate.content.parts)
+                    parts_info = []
+                    
+                    for part_idx, part in enumerate(candidate.content.parts):
+                        part_info = {
+                            "part_index": part_idx,
+                            "has_text": hasattr(part, "text") and bool(part.text),
+                            "has_inline_data": bool(part.inline_data),
+                            "has_as_image": False,
+                        }
+                        
+                        # Check for image data - try multiple methods
+                        # Method 1: Check inline_data first (most reliable)
+                        if part.inline_data and part.inline_data.data:
+                            image_data = part.inline_data.data
+                            part_info["image_data_size"] = len(part.inline_data.data)
+                            part_info["image_mime_type"] = getattr(part.inline_data, "mime_type", None)
+                            print(f"[Gemini] Image generated successfully via inline_data ({len(image_data)} bytes)")
+                            # Still collect this chunk info but return immediately
+                            parts_info.append(part_info)
+                            all_chunks_data.append({
+                                **chunk_info,
+                                "parts": parts_info
+                            })
+                            return image_data
+                        
+                        # Method 2: Try as_image() method (may return PIL Image or other format)
+                        image_obj = None
+                        try:
+                            if hasattr(part, "as_image"):
+                                image_obj = part.as_image()
+                        except Exception as e:
+                            print(f"[Gemini] as_image() failed: {e}")
+                            pass
+                        
+                        if image_obj:
+                            # Try to convert to bytes - handle different return types
+                            try:
+                                # If it's already bytes
+                                if isinstance(image_obj, bytes):
+                                    image_data = image_obj
+                                # If it's a PIL Image
+                                elif hasattr(image_obj, "save"):
+                                    img_bytes = io.BytesIO()
+                                    # Try without format parameter first
+                                    try:
+                                        image_obj.save(img_bytes)
+                                    except:
+                                        # Fallback: try with format
+                                        img_bytes = io.BytesIO()
+                                        image_obj.save(img_bytes, format='PNG')
+                                    image_data = img_bytes.getvalue()
+                                # If it has tobytes() method
+                                elif hasattr(image_obj, "tobytes"):
+                                    image_data = image_obj.tobytes()
+                                else:
+                                    # Try to get bytes some other way
+                                    image_data = bytes(image_obj)
+                                
+                                part_info["has_as_image"] = True
+                                part_info["image_data_size"] = len(image_data)
+                                print(f"[Gemini] Image generated successfully via as_image() ({len(image_data)} bytes)")
+                                # Still collect this chunk info but return immediately
+                                parts_info.append(part_info)
+                                all_chunks_data.append({
+                                    **chunk_info,
+                                    "parts": parts_info
+                                })
+                                return image_data
+                            except Exception as e:
+                                print(f"[Gemini] Failed to convert as_image() to bytes: {e}")
+                                # Continue to try other methods
+                        
+                        # Collect text responses
+                        if hasattr(part, "text") and part.text:
+                            text_content = part.text
+                            all_text_responses.append(text_content)
+                            part_info["text_preview"] = text_content[:200]
+                            part_info["text_length"] = len(text_content)
+                            print(f"[Gemini Text Output]: {text_content[:200]}...")
+                        
+                        parts_info.append(part_info)
+                    
+                    chunk_info["parts"] = parts_info
             
-            # Check for image data first
-            if part.inline_data and part.inline_data.data:
-                image_data = part.inline_data.data
-                print(f"[Gemini] Image generated successfully ({len(image_data)} bytes)")
-                return image_data
-            
-            # Log text chunks for debugging (nếu có)
-            if hasattr(part, "text") and part.text:
-                print(f"[Gemini Text Output]: {part.text[:200]}...")
+            all_chunks_data.append(chunk_info)
                 
     except Exception as e:
-        # Log lỗi chi tiết
+        # Log lỗi chi tiết với full response data
         error_msg = str(e)
         print(f"[Gemini API Error]: {error_msg}")
-        raise ValueError(f"Gemini image generation failed: {error_msg}")
+        print(f"[Gemini Full Response Data]:")
+        print(f"  Text Responses ({len(all_text_responses)}): {json.dumps(all_text_responses, indent=2, ensure_ascii=False)}")
+        print(f"  All Chunks Data: {json.dumps(all_chunks_data, indent=2, default=str, ensure_ascii=False)}")
+        raise ValueError(f"Gemini image generation failed: {error_msg}\nFull response: {json.dumps({'text_responses': all_text_responses, 'chunks': all_chunks_data}, indent=2, default=str, ensure_ascii=False)}")
 
     if not image_data:
+        # Return full response when no image is generated
+        full_response = {
+            "text_responses": all_text_responses,
+            "chunks_data": all_chunks_data,
+            "total_text_chunks": len(all_text_responses),
+            "total_chunks": len(all_chunks_data)
+        }
+        print(f"[Gemini] No image data received. Full response:")
+        print(json.dumps(full_response, indent=2, default=str, ensure_ascii=False))
         raise ValueError(
-            "Gemini finished stream but returned no image data. "
-            "Model may have returned text instead of image. Check your prompt."
+            f"Gemini finished stream but returned no image data. "
+            f"Model may have returned text instead of image. Check your prompt.\n"
+            f"Full response: {json.dumps(full_response, indent=2, default=str, ensure_ascii=False)}"
         )
     
     return image_data

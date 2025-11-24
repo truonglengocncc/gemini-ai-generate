@@ -126,6 +126,10 @@ export default function JobDetailPage() {
               <p className="font-semibold">{job.mode}</p>
             </div>
             <div>
+              <p className="text-sm text-gray-600 dark:text-gray-400">Model</p>
+              <p className="font-semibold">{job.config?.model || "N/A"}</p>
+            </div>
+            <div>
               <p className="text-sm text-gray-600 dark:text-gray-400">Created At</p>
               <p>{new Date(job.createdAt).toLocaleString()}</p>
             </div>

@@ -8,7 +8,8 @@ export default function AutomaticPage() {
   const [files, setFiles] = useState<File[]>([]);
   const [prompt, setPrompt] = useState("");
   const [numVariations, setNumVariations] = useState(4);
-  const [model, setModel] = useState("gemini-2.5-flash-image");
+  const [model, setModel] = useState("gemini-3-pro-image-preview");
+  const [resolution, setResolution] = useState("1K");
   const [groupId, setGroupId] = useState("");
   const [loading, setLoading] = useState(false);
   const [jobId, setJobId] = useState<string | null>(null);
@@ -96,6 +97,7 @@ export default function AutomaticPage() {
           model: model,
           config: {
             num_variations: numVariations,
+            ...(model === "gemini-3-pro-image-preview" && { resolution }),
           },
         }),
       });
@@ -106,7 +108,8 @@ export default function AutomaticPage() {
       setFiles([]);
       setPrompt("");
       setNumVariations(4);
-      setModel("gemini-2.5-flash-image");
+      setModel("gemini-3-pro-image-preview");
+      setResolution("1K");
       setFileInputKey(prev => prev + 1); // Reset file input
       
       // Keep jobId for redirect, but clear groupId
@@ -265,34 +268,24 @@ export default function AutomaticPage() {
               <option value="gemini-3-pro-image-preview" title="Professional asset production with real-world grounding using Google Search. Supports up to 4K resolution with advanced 'Thinking' process.">
                 Gemini 3 Pro Image Preview (4K, Search-grounded)
               </option>
-              <option value="gemini-3-pro-preview" title="Latest Gemini 3 Pro model with advanced capabilities.">
-                Gemini 3 Pro Preview
-              </option>
-              <option value="gemini-2.5-pro" title="High-performance model for complex tasks.">
-                Gemini 2.5 Pro
-              </option>
-              <option value="gemini-flash-latest" title="Latest Flash model with balanced speed and quality.">
-                Gemini Flash Latest
-              </option>
-              <option value="gemini-flash-lite-latest" title="Lightweight Flash model for fastest processing.">
-                Gemini Flash Lite Latest
-              </option>
-              <option value="gemini-2.5-flash" title="Fast and efficient model for quick generation.">
-                Gemini 2.5 Flash
-              </option>
-              <option value="gemini-2.5-flash-lite" title="Lightweight version for rapid processing.">
-                Gemini 2.5 Flash Lite
-              </option>
-              <option value="gemini-2.0-flash" title="Previous generation Flash model.">
-                Gemini 2.0 Flash
-              </option>
-              <option value="gemini-2.0-flash-lite" title="Previous generation lightweight Flash model.">
-                Gemini 2.0 Flash Lite
-              </option>
-              <option value="gemini-robotics-er-1.5-preview" title="Specialized model for robotics and embodied AI applications.">
-                Gemini Robotics ER 1.5 Preview
-              </option>
               </select>
+              {model === "gemini-3-pro-image-preview" && (
+                <div className="mt-4">
+                  <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 mb-2">
+                    Resolution
+                  </label>
+                  <select
+                    value={resolution}
+                    onChange={(e) => setResolution(e.target.value)}
+                    className="w-full p-2 border-2 border-gray-200 dark:border-zinc-700 rounded-lg bg-gray-50 dark:bg-zinc-800/50 focus:border-orange-500 dark:focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-200 dark:focus:ring-orange-900/50 transition-all text-sm"
+                    disabled={loading}
+                  >
+                    <option value="1K">1K (Default)</option>
+                    <option value="2K">2K</option>
+                    <option value="4K">4K</option>
+                  </select>
+                </div>
+              )}
               <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
                 💡 Hover over options for details
               </p>

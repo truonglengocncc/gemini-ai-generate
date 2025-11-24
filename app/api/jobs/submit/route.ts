@@ -12,6 +12,7 @@ export async function POST(request: NextRequest) {
       folder, // GCS folder path (e.g., "job_123/upload")
       prompts,
       config = {},
+      model, // Model name (e.g., "gemini-2.5-flash-image")
       gcs_config,
     } = body;
 
@@ -60,6 +61,11 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Include model in config if provided
+    const configWithModel = model 
+      ? { ...config, model }
+      : config;
+
     // Create job record in database
     const job = await prisma.job.create({
       data: {
@@ -69,7 +75,7 @@ export async function POST(request: NextRequest) {
         status: "queued",
         images: imageUrls, // Store URLs for UI display
         prompts: prompts ? (Array.isArray(prompts) ? prompts : [prompts]) : undefined,
-        config: config || undefined,
+        config: configWithModel || undefined,
       },
     });
 
@@ -79,7 +85,7 @@ export async function POST(request: NextRequest) {
       mode,
       folder, // GCS folder path (worker will list all files from this folder)
       prompts,
-      config,
+      config: configWithModel,
       // Only include gcs_config if explicitly provided (not recommended)
       ...(gcs_config && { gcs_config }),
     }).catch(async (error) => {

@@ -23,7 +23,8 @@ export default function SemiAutomaticPage() {
   const [submitGroupName, setSubmitGroupName] = useState("");
   const [refImages, setRefImages] = useState<File[]>([]);
   const [prompts, setPrompts] = useState<Prompt[]>([{ text: "", countPerRef: 1 }]);
-  const [model, setModel] = useState("gemini-2.5-flash-image");
+  const [model, setModel] = useState("gemini-3-pro-image-preview");
+  const [resolution, setResolution] = useState("1K");
   const [loading, setLoading] = useState(false);
   const [queue, setQueue] = useState<any[]>([]);
   const [queueLoading, setQueueLoading] = useState(false);
@@ -223,6 +224,7 @@ export default function SemiAutomaticPage() {
           model: model,
           config: {
             images_per_prompt: imagesPerPrompt,
+            ...(model === "gemini-3-pro-image-preview" && { resolution }),
           },
         }),
       });
@@ -233,6 +235,8 @@ export default function SemiAutomaticPage() {
       // Reset form
       setRefImages([]);
       setPrompts([{ text: "", countPerRef: 1 }]);
+      setModel("gemini-3-pro-image-preview"); // Reset model to default
+      setResolution("1K"); // Reset resolution to default
     } catch (error) {
       console.error("Failed to submit jobs:", error);
       alert("Failed to submit jobs");
@@ -355,34 +359,24 @@ export default function SemiAutomaticPage() {
                   <option value="gemini-3-pro-image-preview" title="Professional asset production with real-world grounding using Google Search. Supports up to 4K resolution with advanced 'Thinking' process.">
                     Gemini 3 Pro Image Preview (4K, Search-grounded)
                   </option>
-                  <option value="gemini-3-pro-preview" title="Latest Gemini 3 Pro model with advanced capabilities.">
-                    Gemini 3 Pro Preview
-                  </option>
-                  <option value="gemini-2.5-pro" title="High-performance model for complex tasks.">
-                    Gemini 2.5 Pro
-                  </option>
-                  <option value="gemini-flash-latest" title="Latest Flash model with balanced speed and quality.">
-                    Gemini Flash Latest
-                  </option>
-                  <option value="gemini-flash-lite-latest" title="Lightweight Flash model for fastest processing.">
-                    Gemini Flash Lite Latest
-                  </option>
-                  <option value="gemini-2.5-flash" title="Fast and efficient model for quick generation.">
-                    Gemini 2.5 Flash
-                  </option>
-                  <option value="gemini-2.5-flash-lite" title="Lightweight version for rapid processing.">
-                    Gemini 2.5 Flash Lite
-                  </option>
-                  <option value="gemini-2.0-flash" title="Previous generation Flash model.">
-                    Gemini 2.0 Flash
-                  </option>
-                  <option value="gemini-2.0-flash-lite" title="Previous generation lightweight Flash model.">
-                    Gemini 2.0 Flash Lite
-                  </option>
-                  <option value="gemini-robotics-er-1.5-preview" title="Specialized model for robotics and embodied AI applications.">
-                    Gemini Robotics ER 1.5 Preview
-                  </option>
                 </select>
+                {model === "gemini-3-pro-image-preview" && (
+                  <div className="mt-3">
+                    <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 mb-2">
+                      Resolution
+                    </label>
+                    <select
+                      value={resolution}
+                      onChange={(e) => setResolution(e.target.value)}
+                      className="w-full p-2 border-2 border-gray-200 dark:border-zinc-700 rounded-lg bg-gray-50 dark:bg-zinc-800/50 focus:border-orange-500 dark:focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-200 dark:focus:ring-orange-900/50 transition-all text-sm"
+                      disabled={loading}
+                    >
+                      <option value="1K">1K (Default)</option>
+                      <option value="2K">2K</option>
+                      <option value="4K">4K</option>
+                    </select>
+                  </div>
+                )}
                 <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
                   💡 Hover over options for details
                 </p>

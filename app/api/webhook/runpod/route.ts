@@ -11,7 +11,7 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
 
-    console.log("Webhook body:", body);
+    console.log("Webhook body:", JSON.stringify(body, null, 2));
     // RunPod webhook format: https://docs.runpod.io/serverless/workers/webhooks
     const { id: runpodJobId, status, output, error, input } = body;
     
@@ -53,6 +53,9 @@ export async function POST(request: NextRequest) {
       // Store full output in results field
       updateData.results = output;
       updateData.completedAt = new Date();
+      
+      // Log full output for debugging
+      console.log("Output:", JSON.stringify(output, null, 2));
       
       // Extract generated image URLs from output.results and store separately
       if (output.results && Array.isArray(output.results)) {
