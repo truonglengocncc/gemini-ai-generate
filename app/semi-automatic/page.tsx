@@ -25,6 +25,7 @@ export default function SemiAutomaticPage() {
   const [prompts, setPrompts] = useState<Prompt[]>([{ text: "", countPerRef: 1 }]);
   const [model, setModel] = useState("gemini-3-pro-image-preview");
   const [resolution, setResolution] = useState("1K");
+  const [aspectRatio, setAspectRatio] = useState("1:1");
   const [loading, setLoading] = useState(false);
   const [queue, setQueue] = useState<any[]>([]);
   const [queueLoading, setQueueLoading] = useState(false);
@@ -224,7 +225,7 @@ export default function SemiAutomaticPage() {
           model: model,
           config: {
             images_per_prompt: imagesPerPrompt,
-            ...(model === "gemini-3-pro-image-preview" && { resolution }),
+            ...(model === "gemini-3-pro-image-preview" && { resolution, aspect_ratio: aspectRatio }),
           },
         }),
       });
@@ -237,6 +238,7 @@ export default function SemiAutomaticPage() {
       setPrompts([{ text: "", countPerRef: 1 }]);
       setModel("gemini-3-pro-image-preview"); // Reset model to default
       setResolution("1K"); // Reset resolution to default
+      setAspectRatio("1:1"); // Reset aspect ratio to default
     } catch (error) {
       console.error("Failed to submit jobs:", error);
       alert("Failed to submit jobs");
@@ -361,20 +363,44 @@ export default function SemiAutomaticPage() {
                   </option>
                 </select>
                 {model === "gemini-3-pro-image-preview" && (
-                  <div className="mt-3">
-                    <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 mb-2">
-                      Resolution
-                    </label>
-                    <select
-                      value={resolution}
-                      onChange={(e) => setResolution(e.target.value)}
-                      className="w-full p-2 border-2 border-gray-200 dark:border-zinc-700 rounded-lg bg-gray-50 dark:bg-zinc-800/50 focus:border-orange-500 dark:focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-200 dark:focus:ring-orange-900/50 transition-all text-sm"
-                      disabled={loading}
-                    >
-                      <option value="1K">1K (Default)</option>
-                      <option value="2K">2K</option>
-                      <option value="4K">4K</option>
-                    </select>
+                  <div className="mt-3 space-y-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 mb-2">
+                        Resolution
+                      </label>
+                      <select
+                        value={resolution}
+                        onChange={(e) => setResolution(e.target.value)}
+                        className="w-full p-2 border-2 border-gray-200 dark:border-zinc-700 rounded-lg bg-gray-50 dark:bg-zinc-800/50 focus:border-orange-500 dark:focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-200 dark:focus:ring-orange-900/50 transition-all text-sm"
+                        disabled={loading}
+                      >
+                        <option value="1K">1K (Default)</option>
+                        <option value="2K">2K</option>
+                        <option value="4K">4K</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 mb-2">
+                        Aspect Ratio
+                      </label>
+                      <select
+                        value={aspectRatio}
+                        onChange={(e) => setAspectRatio(e.target.value)}
+                        className="w-full p-2 border-2 border-gray-200 dark:border-zinc-700 rounded-lg bg-gray-50 dark:bg-zinc-800/50 focus:border-orange-500 dark:focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-200 dark:focus:ring-orange-900/50 transition-all text-sm"
+                        disabled={loading}
+                      >
+                        <option value="1:1">1:1 (Square)</option>
+                        <option value="2:3">2:3 (Portrait)</option>
+                        <option value="3:2">3:2 (Landscape)</option>
+                        <option value="3:4">3:4 (Portrait)</option>
+                        <option value="4:3">4:3 (Landscape)</option>
+                        <option value="4:5">4:5 (Portrait)</option>
+                        <option value="5:4">5:4 (Landscape)</option>
+                        <option value="9:16">9:16 (Vertical)</option>
+                        <option value="16:9">16:9 (Widescreen)</option>
+                        <option value="21:9">21:9 (Ultrawide)</option>
+                      </select>
+                    </div>
                   </div>
                 )}
                 <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">

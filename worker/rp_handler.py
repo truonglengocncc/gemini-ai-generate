@@ -81,6 +81,7 @@ async def handle_automatic_mode(input_data: Dict[str, Any]) -> Dict[str, Any]:
     config = input_data.get("config", {})
     num_variations = config.get("num_variations", 1)
     resolution = config.get("resolution")  # Get resolution from config (for gemini-3-pro-image-preview)
+    aspect_ratio = config.get("aspect_ratio")  # Get aspect ratio from config (for gemini-3-pro-image-preview)
     gcs_config = input_data.get("gcs_config")
     job_id = input_data.get("job_id", "")
     
@@ -111,7 +112,7 @@ async def handle_automatic_mode(input_data: Dict[str, Any]) -> Dict[str, Any]:
             image_results = []
             for variation in range(num_variations):
                 # Generate Image
-                generated_image = await generate_image_async(image_bytes, prompt, api_key, model_name, resolution)
+                generated_image = await generate_image_async(image_bytes, prompt, api_key, model_name, resolution, aspect_ratio)
                 
                 if gcs_client and gcs_config:
                     timestamp = int(time.time() * 1000)
@@ -173,6 +174,7 @@ async def handle_semi_automatic_mode(input_data: Dict[str, Any]) -> Dict[str, An
     config = input_data.get("config", {})
     images_per_prompt = config.get("images_per_prompt", {})
     resolution = config.get("resolution")  # Get resolution from config (for gemini-3-pro-image-preview)
+    aspect_ratio = config.get("aspect_ratio")  # Get aspect ratio from config (for gemini-3-pro-image-preview)
     gcs_config = input_data.get("gcs_config")
     job_id = input_data.get("job_id", "")
     
@@ -212,7 +214,7 @@ async def handle_semi_automatic_mode(input_data: Dict[str, Any]) -> Dict[str, An
                 
                 async def generate_for_prompt(gen_idx: int):
                     try:
-                        generated_image = await generate_image_async(image_bytes, prompt, api_key, model_name, resolution)
+                        generated_image = await generate_image_async(image_bytes, prompt, api_key, model_name, resolution, aspect_ratio)
                         
                         if gcs_client and gcs_config:
                             timestamp = int(time.time() * 1000)
@@ -263,18 +265,19 @@ async def handle_semi_automatic_mode(input_data: Dict[str, Any]) -> Dict[str, An
 #                            Gemini Generation Logic                           #
 # ---------------------------------------------------------------------------- #
 
-async def generate_image_async(image_bytes: bytes, prompt: str, api_key: str = None, model_name: str = "gemini-3-pro-image-preview", resolution: str = None) -> bytes:
+async def generate_image_async(image_bytes: bytes, prompt: str, api_key: str = None, model_name: str = "gemini-3-pro-image-preview", resolution: str = None, aspect_ratio: str = None) -> bytes:
     if not api_key:
         api_key = os.environ.get("GEMINI_API_KEY")
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, generate_image_sync, image_bytes, prompt, api_key, model_name, resolution)
+    return await loop.run_in_executor(None, generate_image_sync, image_bytes, prompt, api_key, model_name, resolution, aspect_ratio)
 
 
-def generate_image_sync(image_bytes: bytes, prompt: str, api_key: str, model_name: str = "gemini-3-pro-image-preview", resolution: str = None) -> bytes:
+def generate_image_sync(image_bytes: bytes, prompt: str, api_key: str, model_name: str = "gemini-3-pro-image-preview", resolution: str = None, aspect_ratio: str = None) -> bytes:
     """
     Synchronous Gemini API call
     Supports multiple Gemini image generation models
     For gemini-3-pro-image-preview, supports resolution: "1K", "2K", "4K"
+    and aspect_ratio: "1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"
     """
     # Validate prompt không rỗng (safety check)
     if not prompt or not prompt.strip():
@@ -312,11 +315,22 @@ def generate_image_sync(image_bytes: bytes, prompt: str, api_key: str, model_nam
             resolution = "1K"  # Default resolution
             print(f"[Gemini] No resolution specified, using default '1K' for model {model}")
         
+        # Use provided aspect_ratio or default to 1:1
+        if not aspect_ratio:
+            aspect_ratio = "1:1"  # Default aspect ratio
+            print(f"[Gemini] No aspect ratio specified, using default '1:1' for model {model}")
+        else:
+            # Validate aspect ratio
+            valid_aspect_ratios = ["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"]
+            if aspect_ratio not in valid_aspect_ratios:
+                print(f"[Gemini] Warning: Invalid aspect ratio '{aspect_ratio}', using default '1:1'")
+                aspect_ratio = "1:1"
+        
         image_config = types.ImageConfig(
-            aspect_ratio="1:1",  # Default aspect ratio, can be customized later
+            aspect_ratio=aspect_ratio,
             image_size=resolution
         )
-        print(f"[Gemini] Using resolution: {resolution} for model {model}")
+        print(f"[Gemini] Using resolution: {resolution}, aspect_ratio: {aspect_ratio} for model {model}")
     
     # Request both IMAGE and TEXT modalities as per documentation
     # The model will return both, but we prioritize image data
