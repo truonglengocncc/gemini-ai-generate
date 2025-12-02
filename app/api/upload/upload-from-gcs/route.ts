@@ -108,7 +108,7 @@ export async function POST(request: NextRequest) {
 
     // Upload to Gemini File API
     const ai = new GoogleGenAI({ apiKey });
-    const blob = new Blob([buffer], { type: contentType });
+    const blob = new Blob([new Uint8Array(buffer)], { type: contentType });
     const uploadedFile = await ai.files.upload({
       file: blob,
       config: {
@@ -145,4 +145,3 @@ export async function POST(request: NextRequest) {
     );
   }
 }
-

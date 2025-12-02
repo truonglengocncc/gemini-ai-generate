@@ -28,6 +28,7 @@ interface JobsResponse {
     total: number;
     totalPages: number;
   };
+  error?: string;
 }
 
 export default function JobsPage() {
@@ -266,4 +267,3 @@ export default function JobsPage() {
     </div>
   );
 }
-
