@@ -35,7 +35,9 @@ export async function POST(
       });
     }
 
-    if (!job.batchJobName) {
+    const batchJobName = (job as any).batchJobName;
+
+    if (!batchJobName) {
       return NextResponse.json(
         { error: "Batch job name not found" },
         { status: 400 }
@@ -52,7 +54,6 @@ export async function POST(
     }
 
     // Check Gemini Batch API status
-    const batchJobName = job.batchJobName;
     console.log(`[Check Batch] Checking batch job: ${batchJobName}`);
 
     const response = await fetch(
