@@ -35,6 +35,9 @@ model Job {
   // RunPod data
   runpodJobId String?  // RunPod job ID
   
+  // Batch API data (for Gemini Batch API)
+  batchJobName String? // Gemini batch job name (e.g., "batches/abc123")
+  
   // Results
   results     Json?    // Results from RunPod
   error       String?  // Error message if failed

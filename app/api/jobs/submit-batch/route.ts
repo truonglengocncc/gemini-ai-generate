@@ -1,0 +1,292 @@
+import { NextRequest, NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
+import { Storage } from "@google-cloud/storage";
+import { GoogleGenAI } from "@google/genai";
+
+/**
+ * Submit batch job directly to Gemini Batch API (Next.js, not RunPod)
+ * Only for Automatic mode with batch API
+ */
+export async function POST(request: NextRequest) {
+  try {
+    const body = await request.json();
+    const {
+      groupId,
+      jobId: providedJobId,
+      folder, // GCS folder path (e.g., "job_123/upload")
+      prompts,
+      config = {},
+      model, // Model name (e.g., "gemini-2.5-flash-image")
+      file_uris, // (optional) File URIs from Gemini File API
+      inline_data, // inlineData from upload to avoid re-download
+    } = body;
+
+    // Validate input
+    if (!groupId) {
+      return NextResponse.json(
+        { error: "Missing required field: groupId" },
+        { status: 400 }
+      );
+    }
+
+    if (!folder) {
+      return NextResponse.json(
+        { error: "Missing required field: folder (GCS path)" },
+        { status: 400 }
+      );
+    }
+
+    if (!inline_data || !Array.isArray(inline_data) || inline_data.length === 0) {
+      return NextResponse.json(
+        { error: "Missing inline_data. Upload must include inline base64 images." },
+        { status: 400 }
+      );
+    }
+
+    // Use provided jobId or generate new one
+    const jobId = providedJobId || `job_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+    // List image URLs from folder for database storage
+    let imageUrls: string[] = [];
+    const gcsConfig = getGcsConfig();
+    if (gcsConfig && folder) {
+      try {
+        const credentials = JSON.parse(process.env.GCS_SERVICE_ACCOUNT_KEY || "{}");
+        const storage = new Storage({ credentials });
+        const bucket = storage.bucket(gcsConfig.bucket_name);
+        const prefix = folder.endsWith("/") ? folder : `${folder}/`;
+        
+        const [files] = await bucket.getFiles({ prefix });
+        const cdnUrl = process.env.CDN_ASSETS_URL_CAPSURE;
+        
+        imageUrls = files
+          .filter(file => !file.name.endsWith("/"))
+          .map(file => {
+            if (cdnUrl) {
+              return `${cdnUrl.replace(/\/$/, "")}/${file.name}`;
+            }
+            return `https://storage.googleapis.com/${gcsConfig.bucket_name}/${file.name}`;
+          });
+      } catch (error) {
+        console.error("Failed to list files from folder:", error);
+      }
+    }
+
+    // Get prompt
+    const prompt = Array.isArray(prompts) && prompts.length > 0 ? prompts[0] : prompts;
+
+    // Include model in config if provided
+    const configWithModel = model 
+      ? { ...config, model }
+      : config;
+
+    // Create job record in database
+    const job = await prisma.job.create({
+      data: {
+        id: jobId,
+        groupId,
+        mode: "automatic",
+        status: "batch_submitted", // Will be updated when batch completes
+        images: imageUrls,
+        prompts: prompts ? (Array.isArray(prompts) ? prompts : [prompts]) : undefined,
+        config: configWithModel || undefined,
+      },
+    });
+
+    // Submit batch job directly to Gemini Batch API
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      await prisma.job.update({
+        where: { id: jobId },
+        data: { status: "failed", error: "GEMINI_API_KEY not configured" },
+      });
+      return NextResponse.json(
+        { error: "GEMINI_API_KEY not configured" },
+        { status: 500 }
+      );
+    }
+
+    try {
+      const batchJobName = await createBatchJob(
+        apiKey,
+        file_uris || [],
+        prompt,
+        model || configWithModel.model || "gemini-2.5-flash-image",
+        configWithModel,
+        jobId,
+        inline_data
+      );
+
+      console.log(
+        `[Submit Batch] Created batch job ${batchJobName} ` +
+        `(files=${file_uris.length}, variations=${configWithModel.num_variations || 1}, model=${model})`
+      );
+
+      // Update job with batch_job_name
+      await prisma.job.update({
+        where: { id: jobId },
+        data: { 
+          batchJobName: batchJobName || undefined,
+        } as any, // Type assertion - batchJobName exists in schema
+      });
+
+      return NextResponse.json({
+        jobId,
+        status: "batch_submitted",
+        batchJobName,
+      });
+    } catch (error: any) {
+      await prisma.job.update({
+        where: { id: jobId },
+        data: {
+          status: "failed",
+          error: error.message,
+        },
+      });
+      return NextResponse.json(
+        { error: error.message },
+        { status: 500 }
+      );
+    }
+  } catch (error: any) {
+    return NextResponse.json(
+      { error: error.message },
+      { status: 500 }
+    );
+  }
+}
+
+/**
+ * Create batch job in Gemini Batch API
+ */
+async function createBatchJob(
+  apiKey: string,
+  fileUris: Array<{ index: number; fileUri: string; fileName: string }>,
+  prompt: string,
+  model: string,
+  config: any,
+  jobId: string,
+  inlineData?: Array<{ index: number; inlineData: { mimeType: string; data: string } }>
+): Promise<string> {
+  const numVariations = config.num_variations || 1;
+  const resolution = config.resolution;
+  const aspectRatio = config.aspect_ratio;
+
+  // Prefer inlineData passed from upload; if absent, error out to avoid flaky downloads
+  const inlineImages = (inlineData || []).sort((a, b) => a.index - b.index);
+  if (!inlineImages.length) {
+    throw new Error("inline_data is required for batch image requests");
+  }
+
+  // Create JSONL batch requests with inlineData
+  const batchRequests: any[] = [];
+  for (const img of inlineImages) {
+    for (let variation = 0; variation < numVariations; variation++) {
+      const requestObj: any = {
+        contents: [{
+          parts: [
+            { inlineData: img.inlineData },
+            { text: prompt }
+          ],
+          role: "user"
+        }],
+        generationConfig: {
+          responseModalities: ["IMAGE"]
+        }
+      };
+
+      if (model === "gemini-3-pro-image-preview") {
+        requestObj.generationConfig.imageConfig = {
+          aspectRatio: aspectRatio || "1:1",
+          imageSize: (resolution || "1K").toUpperCase()
+        };
+      }
+
+      batchRequests.push({
+        key: `image_${img.index}_variation_${variation}`,
+        request: requestObj
+      });
+    }
+  }
+
+  const jsonlContent = batchRequests.map(req => JSON.stringify(req)).join("\n");
+  const jsonlBuffer = Buffer.from(jsonlContent, "utf-8");
+  console.log(
+    `[Submit Batch] JSONL requests ready (requests=${batchRequests.length}, size=${jsonlBuffer.length} bytes)`
+  );
+
+  const ai = new GoogleGenAI({ apiKey });
+  const jsonlBlob = new Blob([jsonlBuffer], { type: "application/jsonl" });
+  const uploadedJsonlFile = await ai.files.upload({
+    file: jsonlBlob,
+    config: {
+      mimeType: "application/jsonl",
+      displayName: `batch_requests_${jobId}`,
+    },
+  });
+
+  let jsonlFileUri = (uploadedJsonlFile as any).uri || (uploadedJsonlFile as any).name;
+  if (!jsonlFileUri) {
+    throw new Error("No file URI returned from JSONL upload");
+  }
+  jsonlFileUri = normalizeFileUri(jsonlFileUri);
+
+  const batchJob = await ai.batches.create({
+    model: model,
+    src: jsonlFileUri,
+    config: {
+      displayName: `batch-job-${jobId}`,
+    },
+  });
+  console.log(`[Submit Batch] Batch API response`, JSON.stringify(batchJob).slice(0, 500));
+
+  const batchJobName = (batchJob as any).name || (batchJob as any).batch?.name;
+  if (!batchJobName) {
+    throw new Error("No batch job name returned");
+  }
+
+  return batchJobName;
+}
+
+function normalizeFileUri(fileUri: string): string {
+  if (fileUri.startsWith("http")) {
+    const match = fileUri.match(/\/files\/([^\/\?]+)/);
+    if (match) return `files/${match[1]}`;
+  }
+  if (!fileUri.startsWith("files/")) {
+    return `files/${fileUri}`;
+  }
+  return fileUri;
+}
+
+
+/**
+ * Get GCS config from environment variables
+ */
+function getGcsConfig(): any | null {
+  const gcsServiceAccountKey = process.env.GCS_SERVICE_ACCOUNT_KEY;
+  const gcsBucketName = process.env.GCS_BUCKET_NAME;
+  const gcsPathPrefix = process.env.GCS_PATH_PREFIX || "";
+  const cdnUrl = process.env.CDN_ASSETS_URL_CAPSURE;
+
+  if (!gcsServiceAccountKey || !gcsBucketName) {
+    return null;
+  }
+
+  try {
+    const credentials = JSON.parse(gcsServiceAccountKey);
+    const config: any = {
+      credentials,
+      bucket_name: gcsBucketName,
+      path_prefix: gcsPathPrefix,
+    };
+    
+    if (cdnUrl) {
+      config.cdn_url = cdnUrl;
+    }
+    
+    return config;
+  } catch {
+    return null;
+  }
+}

@@ -24,6 +24,7 @@ export default function JobDetailPage() {
   const [job, setJob] = useState<Job | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [checkingBatch, setCheckingBatch] = useState(false);
 
   const fetchJobDetails = async () => {
     try {
@@ -39,6 +40,44 @@ export default function JobDetailPage() {
       console.error("Failed to fetch job details:", err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const checkBatchStatus = async () => {
+    if (!job || job.mode !== "automatic" || job.status !== "batch_submitted") {
+      return;
+    }
+
+    try {
+      setCheckingBatch(true);
+      const response = await fetch(`/api/jobs/${id}/check-batch`, {
+        method: "POST",
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Failed to check batch status");
+      }
+
+      const data = await response.json();
+      
+      const state = data.batchState || data.state;
+
+      // If batch is still processing, just show message
+      if (state && (state === "JOB_STATE_PENDING" || state === "JOB_STATE_RUNNING")) {
+        alert(`Batch job is still processing. State: ${state}`);
+        // Refresh job details to get latest status
+        await fetchJobDetails();
+        return;
+      }
+
+      // If completed or failed, refresh job details to get updated status
+      await fetchJobDetails();
+    } catch (err: any) {
+      console.error("Failed to check batch status:", err);
+      alert(`Error: ${err.message}`);
+    } finally {
+      setCheckingBatch(false);
     }
   };
 
@@ -58,6 +97,8 @@ export default function JobDetailPage() {
         return "bg-blue-100 text-blue-800 dark:bg-blue-900/20 dark:text-blue-300";
       case "queued":
         return "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/20 dark:text-yellow-300";
+      case "batch_submitted":
+        return "bg-purple-100 text-purple-800 dark:bg-purple-900/20 dark:text-purple-300";
       default:
         return "bg-gray-100 text-gray-800 dark:bg-gray-900/20 dark:text-gray-300";
     }
@@ -264,8 +305,38 @@ export default function JobDetailPage() {
             </button>
           </div>
         )}
+
+        {job.status === "batch_submitted" && job.mode === "automatic" && (
+          <div className="bg-purple-50 dark:bg-purple-900/20 p-6 rounded-lg">
+            <p className="text-purple-800 dark:text-purple-300 mb-2">
+              Batch job has been submitted to Gemini. It may take some time to complete.
+            </p>
+            <p className="text-sm text-purple-700 dark:text-purple-400 mb-4">
+              Click the button below to check if the batch job has completed.
+            </p>
+            <button
+              onClick={checkBatchStatus}
+              disabled={checkingBatch}
+              className="px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+            >
+              {checkingBatch ? (
+                <>
+                  <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                  Checking...
+                </>
+              ) : (
+                <>
+                  <span>🔄</span>
+                  Check Batch Status
+                </>
+              )}
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
 }
-

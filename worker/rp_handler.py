@@ -26,6 +26,9 @@ async def handler(job):
     input_data = job['input']
     
     mode = input_data.get('mode')
+    
+    # Note: Automatic mode with batch API is now handled in Next.js directly
+    # RunPod worker only handles regular automatic mode and semi-automatic mode
     if mode == 'automatic':
         return await handle_automatic_mode(input_data)
     elif mode == 'semi-automatic':

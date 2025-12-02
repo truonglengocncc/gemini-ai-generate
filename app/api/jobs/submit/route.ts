@@ -80,6 +80,8 @@ export async function POST(request: NextRequest) {
     });
 
     // Submit to RunPod Serverless (async)
+    // Note: Automatic mode with batch API is handled in /api/jobs/submit-batch (Next.js)
+    // This route is for semi-automatic mode and regular automatic mode (via RunPod)
     // GCS config will be automatically added from env in submitToRunPod
     submitToRunPod(jobId, {
       mode,

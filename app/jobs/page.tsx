@@ -49,10 +49,29 @@ export default function JobsPage() {
       }
 
       const response = await fetch(`/api/jobs?${params}`);
+      
+      if (!response.ok) {
+        throw new Error(`Failed to fetch jobs: ${response.statusText}`);
+      }
+      
       const data: JobsResponse = await response.json();
 
-      setJobs(data.jobs);
-      setTotalPages(data.pagination.totalPages);
+      // Handle error response
+      if (data.error) {
+        throw new Error(data.error);
+      }
+
+      // Ensure data structure exists
+      if (data.jobs) {
+        setJobs(data.jobs);
+      }
+      
+      if (data.pagination?.totalPages !== undefined) {
+        setTotalPages(data.pagination.totalPages);
+      } else {
+        // Fallback: calculate from jobs length if pagination missing
+        setTotalPages(1);
+      }
     } catch (error) {
       console.error("Error fetching jobs:", error);
     } finally {

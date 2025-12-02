@@ -49,6 +49,25 @@ export async function POST(request: NextRequest) {
       updatedAt: new Date(),
     };
 
+    // Handle batch_submitted status (from Batch API)
+    if (output?.status === "batch_submitted" && output?.batch_job_name) {
+      updateData.status = "batch_submitted";
+      updateData.batchJobName = output.batch_job_name;
+      console.log(`Job ${jobId} batch submitted: ${output.batch_job_name}`);
+      
+      await prisma.job.update({
+        where: { id: job.id },
+        data: updateData,
+      });
+
+      return NextResponse.json({
+        success: true,
+        jobId: job.id,
+        status: "batch_submitted",
+        batchJobName: output.batch_job_name,
+      });
+    }
+
     if (status === "COMPLETED" && output) {
       // Store full output in results field
       updateData.results = output;

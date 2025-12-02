@@ -38,26 +38,7 @@ export default function AutomaticPage() {
     }
   };
 
-  const uploadImages = async (jobId: string): Promise<string[]> => {
-    const formData = new FormData();
-    files.forEach((file) => {
-      formData.append("files", file);
-    });
-
-    // Upload to GCS with jobId
-    const response = await fetch(`/api/upload?jobId=${jobId}`, {
-      method: "POST",
-      body: formData,
-    });
-
-    if (!response.ok) {
-      throw new Error("Failed to upload images");
-    }
-
-    const data = await response.json();
-    // URLs from GCS are already absolute (CDN URLs)
-    return data.urls;
-  };
+  // uploadImages function removed - now handled inline in handleSubmit for batch API
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -81,21 +62,41 @@ export default function AutomaticPage() {
       const generatedJobId = `job_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       setJobId(generatedJobId);
 
-      // Upload images to GCS with jobId (path: {jobId}/upload/)
-      await uploadImages(generatedJobId);
+      // Upload images to GCS and Gemini File API (for batch API)
+      const uploadFormData = new FormData();
+      files.forEach((file) => {
+        uploadFormData.append("files", file);
+      });
 
-      // Submit job with folder path instead of individual URLs
-      // Worker will list all files from folder and process them
-      const response = await fetch("/api/jobs/submit", {
+      const uploadResponse = await fetch(`/api/upload?jobId=${generatedJobId}&useBatchApi=true`, {
+        method: "POST",
+        body: uploadFormData,
+      });
+
+      if (!uploadResponse.ok) {
+        throw new Error("Failed to upload images");
+      }
+
+      const uploadData = await uploadResponse.json();
+      const fileUris = uploadData.fileUris; // Array of {index, fileUri, fileName}
+      const inlineData = uploadData.inlineData; // Optional inline data to avoid re-download
+
+      if (!fileUris || fileUris.length === 0) {
+        throw new Error("Failed to upload images to Gemini File API");
+      }
+
+      // Submit batch job directly to Gemini (Next.js, not RunPod)
+      const response = await fetch("/api/jobs/submit-batch", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          mode: "automatic",
           groupId: currentGroupId,
           jobId: generatedJobId,
           folder: `${generatedJobId}/upload`,
           prompts: [prompt],
           model: model,
+          file_uris: fileUris, // File URIs from Gemini File API
+          inline_data: inlineData,
           config: {
             num_variations: numVariations,
             ...(model === "gemini-3-pro-image-preview" && { resolution, aspect_ratio: aspectRatio }),
@@ -369,4 +370,3 @@ export default function AutomaticPage() {
     </div>
   );
 }
-
