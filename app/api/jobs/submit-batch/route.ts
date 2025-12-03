@@ -127,12 +127,15 @@ export async function POST(request: NextRequest) {
         `(files=${filesCount}, variations=${configWithModel.num_variations || 1}, model=${model})`
       );
 
-      // Update job with batch_job_name
+      // Persist batchJobName inside config JSON to avoid schema mismatch on some envs
       await prisma.job.update({
         where: { id: jobId },
         data: { 
-          batchJobName: batchJobName || undefined,
-        } as any, // Type assertion - batchJobName exists in schema
+          config: {
+            ...((configWithModel as any) || {}),
+            batchJobName,
+          } as any,
+        },
       });
 
       return NextResponse.json({

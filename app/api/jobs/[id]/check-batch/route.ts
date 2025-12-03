@@ -35,7 +35,9 @@ export async function POST(
       });
     }
 
-    const batchJobName = (job as any).batchJobName;
+    const batchJobName =
+      (job as any).batchJobName ||
+      ((job as any).config as any)?.batchJobName;
 
     if (!batchJobName) {
       return NextResponse.json(
