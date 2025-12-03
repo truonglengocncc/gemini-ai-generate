@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { Storage } from "@google-cloud/storage";
 
-let corsEnsured = false;
-
 interface PresignFile {
   index: number;
   filename: string;
@@ -32,24 +30,6 @@ export async function POST(request: NextRequest) {
     const credentials = JSON.parse(process.env.GCS_SERVICE_ACCOUNT_KEY);
     const storage = new Storage({ credentials });
     const bucket = storage.bucket(bucketName);
-
-    // Ensure CORS for browser direct upload (optional, controlled by env)
-    if (!corsEnsured && process.env.GCS_ENABLE_CORS === "true") {
-      try {
-        await bucket.setCors([
-          {
-            origin: ["*"],
-            method: ["PUT", "POST", "GET", "HEAD"],
-            responseHeader: ["Content-Type", "x-goog-meta-*"],
-            maxAgeSeconds: 3600,
-          },
-        ]);
-        corsEnsured = true;
-        console.log("[Presign] Set bucket CORS for direct uploads");
-      } catch (err) {
-        console.warn("[Presign] Failed to set CORS (continuing):", err);
-      }
-    }
 
     const uploads = await Promise.all(
       files.map(async (file) => {
