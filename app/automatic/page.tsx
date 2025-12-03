@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 export default function AutomaticPage() {
@@ -12,6 +12,26 @@ export default function AutomaticPage() {
   const [resolution, setResolution] = useState("1K");
   const [aspectRatio, setAspectRatio] = useState("1:1");
   const [groupId, setGroupId] = useState("");
+  const [groupName, setGroupName] = useState("");
+  const [groups, setGroups] = useState<Array<{ id: string; name: string; jobCount?: number }>>([]);
+  const [groupsLoading, setGroupsLoading] = useState(false);
+
+  const handleGroupNameChange = (value: string) => {
+    setGroupName(value);
+    const trimmed = value.trim();
+    if (!trimmed) {
+      setGroupId("");
+      return;
+    }
+    const found = groups.find(
+      (g) => g.name.toLowerCase() === trimmed.toLowerCase()
+    );
+    if (found) {
+      setGroupId(found.id);
+    } else {
+      setGroupId("");
+    }
+  };
   const [loading, setLoading] = useState(false);
   const [jobId, setJobId] = useState<string | null>(null);
   const [fileInputKey, setFileInputKey] = useState(0);
@@ -22,12 +42,30 @@ export default function AutomaticPage() {
     }
   };
 
-  const createGroup = async () => {
+  const loadGroups = async () => {
+    try {
+      setGroupsLoading(true);
+      const res = await fetch("/api/groups");
+      if (!res.ok) return;
+      const data = await res.json();
+      setGroups(data.groups || []);
+    } catch (error) {
+      console.error("Failed to load groups:", error);
+    } finally {
+      setGroupsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadGroups();
+  }, []);
+
+  const createGroup = async (name?: string) => {
     try {
       const response = await fetch("/api/groups", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: `Auto-${Date.now()}` }),
+        body: JSON.stringify({ name: name || `Auto-${Date.now()}` }),
       });
       const data = await response.json();
       setGroupId(data.id);
@@ -52,14 +90,15 @@ export default function AutomaticPage() {
       // Create group if needed
       let currentGroupId = groupId;
       if (!currentGroupId) {
-        currentGroupId = await createGroup();
+        currentGroupId = await createGroup(groupName || undefined);
         if (!currentGroupId) {
           throw new Error("Failed to create group");
         }
       }
 
-      // Generate jobId first
-      const generatedJobId = `job_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      // Generate jobId with resolution + aspect ratio for easy identification
+      const ratioSlug = aspectRatio.replace(/:/g, "x");
+      const generatedJobId = `job_${(resolution || "res").toLowerCase()}_${ratioSlug}_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
       setJobId(generatedJobId);
 
       // Presign GCS URLs then upload directly from client
@@ -127,8 +166,9 @@ export default function AutomaticPage() {
       setAspectRatio("1:1");
       setFileInputKey(prev => prev + 1); // Reset file input
       
-      // Keep jobId for redirect, but clear groupId
+      // Keep jobId for redirect, but clear groupId/name
       // groupId will be available in job detail page
+      setGroupName("");
       
       // Redirect to job detail page after a short delay
       setTimeout(() => {
@@ -158,6 +198,68 @@ export default function AutomaticPage() {
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-6">
+          {/* Group selection / naming */}
+          <div className="bg-white dark:bg-zinc-900 rounded-xl shadow-lg border border-gray-200 dark:border-zinc-800 p-6 hover:shadow-xl transition-shadow">
+            <div className="flex items-center gap-3 mb-2">
+              <div className="w-10 h-10 bg-amber-100 dark:bg-amber-900/30 rounded-lg flex items-center justify-center">
+                <span className="text-xl">🗂️</span>
+              </div>
+              <div className="flex-1">
+                <label className="block text-sm font-semibold text-gray-900 dark:text-gray-100">
+                  Group
+                </label>
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  Select an existing group or enter a new name (empty = Auto-[timestamp]).
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={loadGroups}
+                disabled={groupsLoading || loading}
+                className="text-xs px-3 py-1 rounded border border-amber-300 text-amber-700 hover:bg-amber-50 disabled:opacity-50"
+              >
+                {groupsLoading ? "Loading..." : "Refresh"}
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs font-semibold text-gray-700 dark:text-gray-300">
+                  Choose existing group
+                </label>
+                <select
+                  value={groupId}
+                  onChange={(e) => {
+                    setGroupId(e.target.value);
+                    if (e.target.value) setGroupName(""); // clear name when picking existing
+                  }}
+                  className="w-full mt-1 p-3 border-2 border-gray-200 dark:border-zinc-700 rounded-lg bg-gray-50 dark:bg-zinc-800/50 focus:border-amber-500 dark:focus:border-amber-500 focus:outline-none"
+                  disabled={loading}
+                >
+                  <option value="">-- Create new group --</option>
+                  {groups.map((g) => (
+                    <option key={g.id} value={g.id}>
+                      {g.name} {g.jobCount ? `(${g.jobCount} jobs)` : ""}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold text-gray-700 dark:text-gray-300">
+                  Or enter a new group name
+                </label>
+                <input
+                  type="text"
+                  value={groupName}
+                  onChange={(e) => handleGroupNameChange(e.target.value)}
+                  placeholder="e.g., Project A - background set"
+                  className="w-full mt-1 p-3 border-2 border-gray-200 dark:border-zinc-700 rounded-lg bg-gray-50 dark:bg-zinc-800/50 focus:border-amber-500 dark:focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-200 dark:focus:ring-amber-900/40 transition-all"
+                  disabled={loading}
+                />
+              </div>
+            </div>
+          </div>
           {/* Upload Images Card */}
           <div className="bg-white dark:bg-zinc-900 rounded-xl shadow-lg border border-gray-200 dark:border-zinc-800 p-6 hover:shadow-xl transition-shadow">
             <div className="flex items-center gap-3 mb-4">

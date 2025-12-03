@@ -30,6 +30,7 @@ export async function GET(
     const imageData: Array<{ url: string; filename: string }> = [];
 
     for (const job of groupJobs) {
+      const jobFolder = job.id.replace(/[^a-zA-Z0-9_-]/g, "_");
       if (job.results && typeof job.results === "object") {
         const results = (job.results as any).results;
         if (Array.isArray(results)) {
@@ -40,7 +41,7 @@ export async function GET(
               const filename = urlParts[urlParts.length - 1];
               imageData.push({
                 url: result.gcs_url,
-                filename: filename,
+                filename: `${jobFolder}/${filename}`,
               });
             }
           }
@@ -117,4 +118,3 @@ export async function GET(
     );
   }
 }
-
