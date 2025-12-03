@@ -96,7 +96,7 @@ export async function POST(request: NextRequest) {
         where: { id: jobId },
         data: {
           status: "failed",
-          error: error.message,
+          error: truncateError(error?.message || String(error)),
         },
       });
     });
@@ -144,6 +144,11 @@ function getGcsConfig(): any | null {
   } catch {
     return null;
   }
+}
+
+function truncateError(msg: string, max: number = 180) {
+  if (!msg) return "";
+  return msg.length > max ? `${msg.slice(0, max - 3)}...` : msg;
 }
 
 async function submitToRunPod(jobId: string, payload: any) {
@@ -244,4 +249,3 @@ async function submitToRunPod(jobId: string, payload: any) {
     throw error;
   }
 }
-

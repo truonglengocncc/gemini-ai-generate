@@ -133,10 +133,10 @@ export async function POST(
       }
     } else if (failedStates.includes(batchState)) {
       updateData.status = "failed";
-      updateData.error = batchError?.message || JSON.stringify(batchError) || "Batch job failed";
+      updateData.error = truncateError(batchError?.message || JSON.stringify(batchError) || "Batch job failed");
     } else if (cancelledStates.includes(batchState)) {
       updateData.status = "failed";
-      updateData.error = "Batch job was cancelled or expired";
+      updateData.error = truncateError("Batch job was cancelled or expired");
     } else {
       // Still processing: JOB_STATE_PENDING, JOB_STATE_RUNNING
       // Don't update status, just return current state
@@ -448,4 +448,9 @@ function getGcsConfig(): any | null {
   } catch {
     return null;
   }
+}
+
+function truncateError(msg: string, max: number = 180) {
+  if (!msg) return "";
+  return msg.length > max ? `${msg.slice(0, max - 3)}...` : msg;
 }

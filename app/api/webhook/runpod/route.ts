@@ -94,7 +94,8 @@ export async function POST(request: NextRequest) {
     }
 
     if (status === "FAILED" && error) {
-      updateData.error = typeof error === "string" ? error : JSON.stringify(error);
+      const errMsg = typeof error === "string" ? error : JSON.stringify(error);
+      updateData.error = truncateError(errMsg);
     }
 
     await prisma.job.update({
@@ -125,3 +126,7 @@ export async function GET(request: NextRequest) {
   });
 }
 
+function truncateError(msg: string, max: number = 180) {
+  if (!msg) return "";
+  return msg.length > max ? `${msg.slice(0, max - 3)}...` : msg;
+}

@@ -99,7 +99,7 @@ export async function POST(request: NextRequest) {
     if (!apiKey) {
       await prisma.job.update({
         where: { id: jobId },
-        data: { status: "failed", error: "GEMINI_API_KEY not configured" },
+        data: { status: "failed", error: truncateError("GEMINI_API_KEY not configured") },
       });
       return NextResponse.json(
         { error: "GEMINI_API_KEY not configured" },
@@ -145,7 +145,7 @@ export async function POST(request: NextRequest) {
         where: { id: jobId },
         data: {
           status: "failed",
-          error: error.message,
+          error: truncateError(error?.message || String(error)),
         },
       });
       return NextResponse.json(
@@ -282,6 +282,11 @@ function normalizeFileUri(fileUri: string): string {
     return `files/${fileUri}`;
   }
   return fileUri;
+}
+
+function truncateError(msg: string, max: number = 180) {
+  if (!msg) return "";
+  return msg.length > max ? `${msg.slice(0, max - 3)}...` : msg;
 }
 
 
