@@ -17,8 +17,9 @@ export async function POST(request: NextRequest) {
       prompts,
       config = {},
       model, // Model name (e.g., "gemini-2.5-flash-image")
-      file_uris, // (optional) File URIs from Gemini File API
-      inline_data, // inlineData from upload to avoid re-download
+      file_uris, // (optional) legacy
+      inline_data, // optional inlineData
+      gcs_files, // optional GCS files uploaded via presign
     } = body;
 
     // Validate input
@@ -36,9 +37,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (!inline_data || !Array.isArray(inline_data) || inline_data.length === 0) {
+    if ((!inline_data || inline_data.length === 0) && (!gcs_files || gcs_files.length === 0)) {
       return NextResponse.json(
-        { error: "Missing inline_data. Upload must include inline base64 images." },
+        { error: "Missing inline_data or gcs_files. Upload must include images." },
         { status: 400 }
       );
     }
@@ -109,7 +110,7 @@ export async function POST(request: NextRequest) {
     try {
       const batchJobName = await createBatchJob(
         apiKey,
-        file_uris || [],
+        gcs_files || [],
         prompt,
         model || configWithModel.model || "gemini-2.5-flash-image",
         configWithModel,
@@ -117,9 +118,13 @@ export async function POST(request: NextRequest) {
         inline_data
       );
 
+      const filesCount =
+        (gcs_files && Array.isArray(gcs_files) ? gcs_files.length : 0) ||
+        (inline_data && Array.isArray(inline_data) ? inline_data.length : 0);
+
       console.log(
         `[Submit Batch] Created batch job ${batchJobName} ` +
-        `(files=${file_uris.length}, variations=${configWithModel.num_variations || 1}, model=${model})`
+        `(files=${filesCount}, variations=${configWithModel.num_variations || 1}, model=${model})`
       );
 
       // Update job with batch_job_name
@@ -161,7 +166,7 @@ export async function POST(request: NextRequest) {
  */
 async function createBatchJob(
   apiKey: string,
-  fileUris: Array<{ index: number; fileUri: string; fileName: string }>,
+  gcsFiles: Array<{ index: number; gcsPath: string; contentType?: string; publicUrl?: string }>,
   prompt: string,
   model: string,
   config: any,
@@ -172,10 +177,30 @@ async function createBatchJob(
   const resolution = config.resolution;
   const aspectRatio = config.aspect_ratio;
 
-  // Prefer inlineData passed from upload; if absent, error out to avoid flaky downloads
-  const inlineImages = (inlineData || []).sort((a, b) => a.index - b.index);
+  // Prefer inlineData passed from upload; if absent, download from GCS
+  let inlineImages = (inlineData || []).sort((a, b) => a.index - b.index);
   if (!inlineImages.length) {
-    throw new Error("inline_data is required for batch image requests");
+    const gcsConfig = getGcsConfig();
+    if (!gcsConfig) {
+      throw new Error("GCS not configured and inline_data not provided");
+    }
+    const credentials = JSON.parse(process.env.GCS_SERVICE_ACCOUNT_KEY || "{}");
+    const storage = new Storage({ credentials });
+    const bucket = storage.bucket(gcsConfig.bucket_name);
+
+    inlineImages = await Promise.all(
+      gcsFiles.sort((a, b) => a.index - b.index).map(async (file) => {
+        const [buffer] = await bucket.file(file.gcsPath).download();
+        const mimeType = file.contentType || "image/jpeg";
+        return {
+          index: file.index,
+          inlineData: {
+            mimeType,
+            data: buffer.toString("base64"),
+          },
+        };
+      })
+    );
   }
 
   // Create JSONL batch requests with inlineData

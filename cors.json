@@ -1,0 +1,8 @@
+[
+  {
+    "origin": ["http://localhost:3000", "https://gemini-ai-generate.vercel.app"],
+    "method": ["PUT", "POST", "GET", "HEAD"],
+    "responseHeader": ["Content-Type", "x-goog-meta-*"],
+    "maxAgeSeconds": 3600
+  }
+]

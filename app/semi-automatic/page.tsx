@@ -152,22 +152,36 @@ export default function SemiAutomaticPage() {
   };
 
   const uploadRefImages = async (jobId: string): Promise<string[]> => {
-    const formData = new FormData();
-    refImages.forEach((file) => {
-      formData.append("files", file);
-    });
-
-    const response = await fetch(`/api/upload?jobId=${jobId}`, {
+    // 1) Presign upload URLs
+    const presignRes = await fetch("/api/upload/presign", {
       method: "POST",
-      body: formData,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        jobId,
+        files: refImages.map((f, idx) => ({
+          index: idx,
+          filename: f.name,
+          contentType: f.type || "image/jpeg",
+        })),
+      }),
     });
+    if (!presignRes.ok) throw new Error("Failed to presign upload URLs");
+    const { uploads } = await presignRes.json();
 
-    if (!response.ok) {
-      throw new Error("Failed to upload images");
-    }
+    // 2) Upload directly to GCS
+    await Promise.all(
+      uploads.map(async (u: any) => {
+        const file = refImages[u.index];
+        await fetch(u.uploadUrl, {
+          method: "PUT",
+          headers: { "Content-Type": u.contentType },
+          body: file,
+        });
+      })
+    );
 
-    const data = await response.json();
-    return data.urls;
+    // 3) Return public URLs for UI display
+    return uploads.map((u: any) => u.publicUrl);
   };
 
   // Calculate total images
@@ -649,4 +663,3 @@ export default function SemiAutomaticPage() {
     </div>
   );
 }
-

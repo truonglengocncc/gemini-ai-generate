@@ -62,28 +62,41 @@ export default function AutomaticPage() {
       const generatedJobId = `job_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       setJobId(generatedJobId);
 
-      // Upload images to GCS and Gemini File API (for batch API)
-      const uploadFormData = new FormData();
-      files.forEach((file) => {
-        uploadFormData.append("files", file);
-      });
-
-      const uploadResponse = await fetch(`/api/upload?jobId=${generatedJobId}&useBatchApi=true`, {
+      // Presign GCS URLs then upload directly from client
+      const presignRes = await fetch("/api/upload/presign", {
         method: "POST",
-        body: uploadFormData,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jobId: generatedJobId,
+          files: files.map((f, idx) => ({
+            index: idx,
+            filename: f.name,
+            contentType: f.type || "image/jpeg",
+          })),
+        }),
       });
-
-      if (!uploadResponse.ok) {
-        throw new Error("Failed to upload images");
+      if (!presignRes.ok) {
+        throw new Error("Failed to presign upload URLs");
       }
+      const { uploads } = await presignRes.json();
+      // Upload each file with fetch PUT
+      await Promise.all(
+        uploads.map(async (u: any) => {
+          const file = files[u.index];
+          await fetch(u.uploadUrl, {
+            method: "PUT",
+            headers: { "Content-Type": u.contentType },
+            body: file,
+          });
+        })
+      );
 
-      const uploadData = await uploadResponse.json();
-      const fileUris = uploadData.fileUris; // Array of {index, fileUri, fileName}
-      const inlineData = uploadData.inlineData; // Optional inline data to avoid re-download
-
-      if (!fileUris || fileUris.length === 0) {
-        throw new Error("Failed to upload images to Gemini File API");
-      }
+      const gcsFiles = uploads.map((u: any) => ({
+        index: u.index,
+        gcsPath: u.filePath,
+        contentType: u.contentType,
+        publicUrl: u.publicUrl,
+      }));
 
       // Submit batch job directly to Gemini (Next.js, not RunPod)
       const response = await fetch("/api/jobs/submit-batch", {
@@ -95,8 +108,7 @@ export default function AutomaticPage() {
           folder: `${generatedJobId}/upload`,
           prompts: [prompt],
           model: model,
-          file_uris: fileUris, // File URIs from Gemini File API
-          inline_data: inlineData,
+          gcs_files: gcsFiles,
           config: {
             num_variations: numVariations,
             ...(model === "gemini-3-pro-image-preview" && { resolution, aspect_ratio: aspectRatio }),
