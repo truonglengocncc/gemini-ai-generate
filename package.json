@@ -20,10 +20,10 @@
     "@prisma/client": "^6.19.0",
     "@types/archiver": "^7.0.0",
     "archiver": "^7.0.1",
-    "next": "16.0.3",
+    "next": "16.0.7",
     "prisma": "^6.19.0",
-    "react": "19.2.0",
-    "react-dom": "19.2.0"
+    "react": "19.2.1",
+    "react-dom": "19.2.1"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
