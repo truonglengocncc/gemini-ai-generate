@@ -55,19 +55,16 @@ export async function POST(request: NextRequest) {
         const credentials = JSON.parse(process.env.GCS_SERVICE_ACCOUNT_KEY || "{}");
         const storage = new Storage({ credentials });
         const bucket = storage.bucket(gcsConfig.bucket_name);
-        const prefix = folder.endsWith("/") ? folder : `${folder}/`;
+        const fullPrefix = gcsConfig.path_prefix
+          ? `${gcsConfig.path_prefix.replace(/\/+$/, "")}/${folder}`
+          : folder;
+        const prefix = fullPrefix.endsWith("/") ? fullPrefix : `${fullPrefix}/`;
         
         const [files] = await bucket.getFiles({ prefix });
-        const cdnUrl = process.env.CDN_ASSETS_URL_CAPSURE;
-        
+        // Use public GCS URLs (CDN currently disabled)
         imageUrls = files
           .filter(file => !file.name.endsWith("/"))
-          .map(file => {
-            if (cdnUrl) {
-              return `${cdnUrl.replace(/\/$/, "")}/${file.name}`;
-            }
-            return `https://storage.googleapis.com/${gcsConfig.bucket_name}/${file.name}`;
-          });
+          .map(file => `https://storage.googleapis.com/${gcsConfig.bucket_name}/${file.name}`);
       } catch (error) {
         console.error("Failed to list files from folder:", error);
       }
@@ -193,7 +190,11 @@ async function createBatchJob(
 
     inlineImages = await Promise.all(
       gcsFiles.sort((a, b) => a.index - b.index).map(async (file) => {
-        const [buffer] = await bucket.file(file.gcsPath).download();
+        const hasPrefix = file.gcsPath.startsWith(gcsConfig.path_prefix);
+        const gcsPath = hasPrefix
+          ? file.gcsPath
+          : `${gcsConfig.path_prefix}/${file.gcsPath.replace(/^\/+/, "")}`;
+        const [buffer] = await bucket.file(gcsPath).download();
         const mimeType = file.contentType || "image/jpeg";
         return {
           index: file.index,
@@ -299,8 +300,7 @@ function truncateError(msg: string, max: number = 180) {
 function getGcsConfig(): any | null {
   const gcsServiceAccountKey = process.env.GCS_SERVICE_ACCOUNT_KEY;
   const gcsBucketName = process.env.GCS_BUCKET_NAME;
-  const gcsPathPrefix = process.env.GCS_PATH_PREFIX || "";
-  const cdnUrl = process.env.CDN_ASSETS_URL_CAPSURE;
+  const gcsPathPrefix = process.env.GCS_PATH_PREFIX || "gemini-generate";
 
   if (!gcsServiceAccountKey || !gcsBucketName) {
     return null;
@@ -311,12 +311,8 @@ function getGcsConfig(): any | null {
     const config: any = {
       credentials,
       bucket_name: gcsBucketName,
-      path_prefix: gcsPathPrefix,
+      path_prefix: gcsPathPrefix.replace(/\/+$/, ""),
     };
-    
-    if (cdnUrl) {
-      config.cdn_url = cdnUrl;
-    }
     
     return config;
   } catch {

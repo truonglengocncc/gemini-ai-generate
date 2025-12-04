@@ -42,19 +42,14 @@ export async function POST(request: NextRequest) {
         const credentials = JSON.parse(process.env.GCS_SERVICE_ACCOUNT_KEY || "{}");
         const storage = new Storage({ credentials });
         const bucket = storage.bucket(gcsConfig.bucket_name);
-        const prefix = folder.endsWith("/") ? folder : `${folder}/`;
-        
+        const pathPrefix = (process.env.GCS_PATH_PREFIX || "gemini-generate").replace(/\/+$/, "");
+        const prefix = `${pathPrefix}/${folder}${folder.endsWith("/") ? "" : "/"}`;
+        const useCdn = false; // public GCS
+
         const [files] = await bucket.getFiles({ prefix });
-        const cdnUrl = process.env.CDN_ASSETS_URL_CAPSURE;
-        
         imageUrls = files
           .filter(file => !file.name.endsWith("/"))
-          .map(file => {
-            if (cdnUrl) {
-              return `${cdnUrl.replace(/\/$/, "")}/${file.name}`;
-            }
-            return `https://storage.googleapis.com/${gcsConfig.bucket_name}/${file.name}`;
-          });
+          .map(file => `https://storage.googleapis.com/${gcsConfig.bucket_name}/${file.name}`);
       } catch (error) {
         console.error("Failed to list files from folder:", error);
         // Continue without URLs, will be empty array
@@ -121,7 +116,6 @@ function getGcsConfig(): any | null {
   const gcsServiceAccountKey = process.env.GCS_SERVICE_ACCOUNT_KEY;
   const gcsBucketName = process.env.GCS_BUCKET_NAME;
   const gcsPathPrefix = process.env.GCS_PATH_PREFIX || "";
-  const cdnUrl = process.env.CDN_ASSETS_URL_CAPSURE;
 
   if (!gcsServiceAccountKey || !gcsBucketName) {
     return null; // GCS not configured
@@ -132,14 +126,9 @@ function getGcsConfig(): any | null {
     const config: any = {
       credentials,
       bucket_name: gcsBucketName,
-      path_prefix: gcsPathPrefix,
+      path_prefix: (gcsPathPrefix || "gemini-generate").replace(/\/+$/, ""),
     };
-    
-    // Add CDN URL if configured
-    if (cdnUrl) {
-      config.cdn_url = cdnUrl;
-    }
-    
+
     return config;
   } catch {
     return null;

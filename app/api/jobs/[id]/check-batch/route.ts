@@ -405,7 +405,8 @@ async function uploadImageToGcs(
   // Use same path structure as regular automatic mode
   const timestamp = Date.now();
   const uniqueId = `${timestamp}_${imageIndex}_${variation}`;
-  const pathPrefix = `${jobId}/processed`;
+  const rootPrefix = (process.env.GCS_PATH_PREFIX || "gemini-generate").replace(/\/+$/, "");
+  const pathPrefix = `${rootPrefix}/${jobId}/processed`;
   const filename = `${pathPrefix}/automatic/${imageIndex}/variation_${variation}_${uniqueId}.jpg`;
   
   const blob = bucket.file(filename);
@@ -413,21 +414,7 @@ async function uploadImageToGcs(
     contentType: "image/jpeg",
   });
 
-  // Return CDN URL or signed URL
-  const cdnUrl = process.env.CDN_ASSETS_URL_CAPSURE;
-  if (cdnUrl) {
-    return `${cdnUrl.replace(/\/$/, "")}/${filename}`;
-  }
-  
-  try {
-    const [url] = await blob.getSignedUrl({
-      action: "read",
-      expires: Date.now() + 86400 * 1000, // 24 hours
-    });
-    return url;
-  } catch {
-    return `https://storage.googleapis.com/${gcsConfig.bucket_name}/${filename}`;
-  }
+  return `https://storage.googleapis.com/${gcsConfig.bucket_name}/${filename}`;
 }
 
 /**

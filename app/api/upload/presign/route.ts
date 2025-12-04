@@ -30,11 +30,13 @@ export async function POST(request: NextRequest) {
     const credentials = JSON.parse(process.env.GCS_SERVICE_ACCOUNT_KEY);
     const storage = new Storage({ credentials });
     const bucket = storage.bucket(bucketName);
+    const prefix = (process.env.GCS_PATH_PREFIX || "gemini-generate").replace(/\/+$/, "");
+    const useCdn = false; // CDN disabled, use public GCS URL
 
     const uploads = await Promise.all(
       files.map(async (file) => {
         const safeName = file.filename.replace(/[^a-zA-Z0-9._-]/g, "_");
-        const path = `${jobId}/upload/${safeName}`;
+        const path = `${prefix}/${jobId}/upload/${safeName}`;
         const gcsFile = bucket.file(path);
         const [url] = await gcsFile.getSignedUrl({
           version: "v4",
@@ -43,10 +45,7 @@ export async function POST(request: NextRequest) {
           contentType: file.contentType || "application/octet-stream",
         });
 
-        const cdn = process.env.CDN_ASSETS_URL_CAPSURE;
-        const publicUrl = cdn
-          ? `${cdn.replace(/\/$/, "")}/${path}`
-          : `https://storage.googleapis.com/${bucketName}/${path}`;
+        const publicUrl = `https://storage.googleapis.com/${bucketName}/${path}`;
 
         return {
           index: file.index,

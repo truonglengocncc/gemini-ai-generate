@@ -47,11 +47,8 @@ async function uploadToGcs(
   });
 
   // Use CDN URL if configured, otherwise use signed URL (1 day) or public URL
-  const cdnUrl = process.env.CDN_ASSETS_URL_CAPSURE;
-  if (cdnUrl) {
-    // Use CDN URL
-    return `${cdnUrl}/${blobPath}`;
-  }
+  // Use public GCS URL (CDN currently disabled/broken)
+  const cdnUrl = null; // use public GCS
 
   // Generate signed URL (valid for 1 day) or use public URL
   try {
@@ -116,10 +113,11 @@ export async function POST(request: NextRequest) {
       const random = Math.random().toString(36).substring(2, 9);
       const extension = file.name.split(".").pop() || "jpg";
       const filename = `${timestamp}_${random}.${extension}`;
+      const pathPrefix = (process.env.GCS_PATH_PREFIX || "gemini-generate").replace(/\/+$/, "");
 
       if (useGcs) {
         // Upload to GCS at {jobId}/upload path
-        const blobPath = `${jobId}/upload/${filename}`;
+        const blobPath = `${pathPrefix}/${jobId}/upload/${filename}`;
         const contentType = file.type || "image/jpeg";
         const url = await uploadToGcs(
           gcsClient!,
@@ -213,4 +211,3 @@ export async function POST(request: NextRequest) {
     );
   }
 }
-
