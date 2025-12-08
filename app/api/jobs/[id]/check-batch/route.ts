@@ -271,9 +271,12 @@ async function downloadAndProcessBatchResults(
               // Parse key to get image index and variation
               // key format: "image_{index}_variation_{variation}"
               const key = parsed.key || `result_${results.length}`;
-              const match = key.match(/image_(\d+)_variation_(\d+)/);
-              const imageIndex = match ? parseInt(match[1]) : results.length;
-              const variation = match ? parseInt(match[2]) : 0;
+              const match = key.match(/r([0-9x]+)_p(\d+)_image_(\d+)_variation_(\d+)/) ||
+                key.match(/image_(\d+)_variation_(\d+)/);
+              const ratioSlug = match && match.length === 5 ? match[1] : undefined;
+              const imageIndex = match ? parseInt(match[match.length - 2]) : results.length;
+              const variation = match ? parseInt(match[match.length - 1]) : 0;
+              const ratio = ratioSlug ? ratioSlug.replace(/x/g, ":") : undefined;
               
               // Upload to GCS
               if (gcsConfig) {
@@ -283,12 +286,14 @@ async function downloadAndProcessBatchResults(
                   job.id,
                   imageIndex,
                   variation,
+                  ratioSlug,
                   gcsConfig
                 );
                 
                 results.push({
                   original_index: imageIndex,
                   variation: variation,
+                  ratio: ratio,
                   gcs_url: gcsUrl,
                 });
               } else {
@@ -296,6 +301,7 @@ async function downloadAndProcessBatchResults(
                 results.push({
                   original_index: imageIndex,
                   variation: variation,
+                  ratio: ratio,
                   image: part.inlineData.data,
                 });
               }
@@ -345,9 +351,12 @@ async function processInlineResponses(inlinedResponses: any[] | undefined, job: 
       inlineResponse.key ||
       inlineResponse.metadata?.key ||
       `result_${results.length}`;
-    const match = key.match(/image_(\d+)_variation_(\d+)/);
-    const imageIndex = match ? parseInt(match[1]) : results.length;
-    const variation = match ? parseInt(match[2]) : 0;
+    const match = key.match(/r([0-9x]+)_p(\d+)_image_(\d+)_variation_(\d+)/) ||
+      key.match(/image_(\d+)_variation_(\d+)/);
+    const ratioSlug = match && match.length === 5 ? match[1] : undefined;
+    const imageIndex = match ? parseInt(match[match.length - 2]) : results.length;
+    const variation = match ? parseInt(match[match.length - 1]) : 0;
+    const ratio = ratioSlug ? ratioSlug.replace(/x/g, ":") : undefined;
 
     for (const part of parts) {
       if (part.inlineData?.data) {
@@ -360,6 +369,7 @@ async function processInlineResponses(inlinedResponses: any[] | undefined, job: 
             job.id,
             imageIndex,
             variation,
+            ratioSlug,
             gcsConfig
           ).catch((err) => {
             console.error("[Check Batch] Failed to upload inline image:", err);
@@ -370,6 +380,7 @@ async function processInlineResponses(inlinedResponses: any[] | undefined, job: 
             results.push({
               original_index: imageIndex,
               variation,
+              ratio,
               gcs_url: gcsUrl,
             });
           }
@@ -377,6 +388,7 @@ async function processInlineResponses(inlinedResponses: any[] | undefined, job: 
           results.push({
             original_index: imageIndex,
             variation,
+            ratio,
             image: part.inlineData.data,
           });
         }
@@ -396,6 +408,7 @@ async function uploadImageToGcs(
   jobId: string,
   imageIndex: number,
   variation: number,
+  ratioSlug: string | undefined,
   gcsConfig: any
 ): Promise<string> {
   const credentials = JSON.parse(process.env.GCS_SERVICE_ACCOUNT_KEY || "{}");
@@ -406,9 +419,10 @@ async function uploadImageToGcs(
   const timestamp = Date.now();
   const uniqueId = `${timestamp}_${imageIndex}_${variation}`;
   const rootPrefix = (process.env.GCS_PATH_PREFIX || "gemini-generate").replace(/\/+$/, "");
+  const ratioFolder = ratioSlug ? ratioSlug : "default";
   const pathPrefix = `${rootPrefix}/${jobId}/processed`;
-  const filename = `${pathPrefix}/automatic/${imageIndex}/variation_${variation}_${uniqueId}.jpg`;
-  
+  const filename = `${pathPrefix}/automatic/${ratioFolder}/${imageIndex}/variation_${variation}_${uniqueId}.jpg`;
+
   const blob = bucket.file(filename);
   await blob.save(imageBuffer, {
     contentType: "image/jpeg",

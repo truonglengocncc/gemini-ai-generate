@@ -220,7 +220,7 @@ export default function SemiAutomaticPage() {
       
       validPrompts.forEach((p, promptIdx) => {
         promptTexts.push(p.text);
-        // Mỗi ref image sẽ dùng prompt này để generate countPerRef ảnh
+        // Each ref image will use this prompt to generate countPerRef images
         refImages.forEach((_, refIdx) => {
           imagesPerPrompt[`${refIdx}_${promptIdx}`] = p.countPerRef;
         });

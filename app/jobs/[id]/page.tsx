@@ -140,7 +140,15 @@ export default function JobDetailPage() {
     );
   }
 
-  const generatedImages = job.results?.results?.map((r: any) => r.gcs_url).filter(Boolean) || [];
+  const resultList: any[] = Array.isArray(job.results?.results) ? job.results.results : [];
+  const generatedImages = resultList.map((r: any) => r.gcs_url).filter(Boolean);
+  const groupedResults: Record<string, any[]> = resultList.reduce((acc: Record<string, any[]>, item: any) => {
+    const key = item.ratio || "default";
+    if (!acc[key]) acc[key] = [];
+    acc[key].push(item);
+    return acc;
+  }, {});
+  const ratioKeys = Object.keys(groupedResults);
 
   return (
     <div className="min-h-screen bg-zinc-50 dark:bg-black p-8">
@@ -156,6 +164,7 @@ export default function JobDetailPage() {
               {job.status.toUpperCase()}
             </span>
           </div>
+
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
             <div>
@@ -256,28 +265,59 @@ export default function JobDetailPage() {
         {/* Generated Images Section */}
         {generatedImages.length > 0 && (
           <div className="bg-white dark:bg-zinc-900 rounded-lg shadow-md p-6">
-            <h2 className="text-2xl font-bold mb-4">
-              Generated Images ({generatedImages.length})
-            </h2>
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-              {job.results.results.map((result: any, idx: number) => (
-                <div key={idx} className="relative group">
-                  <img
-                    src={result.gcs_url}
-                    alt={`Generated ${idx + 1}`}
-                    className="w-full h-48 object-cover rounded-lg border-2 border-green-200 dark:border-green-700"
-                  />
-                  <div className="absolute top-2 right-2 bg-black bg-opacity-75 text-white text-xs px-2 py-1 rounded">
-                    Var {result.variation}
+            <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
+              <h2 className="text-2xl font-bold">
+                Generated Images ({generatedImages.length})
+              </h2>
+              <button
+                onClick={() => window.location.href = `/api/jobs/${job.id}/download`}
+                disabled={job.status !== "completed"}
+                className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed shadow"
+                title={job.status === "completed" ? "Download results as ZIP" : "Job not completed yet"}
+              >
+                Download Results
+              </button>
+            </div>
+            <div className="space-y-6">
+              {ratioKeys.map((ratioKey) => (
+                <div key={ratioKey}>
+                  <div className="flex items-center gap-2 mb-2">
+                    <div className="px-3 py-1 rounded-full bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-200 text-xs font-semibold">
+                      Ratio {ratioKey === "default" ? "N/A" : ratioKey.replace(/x/g, ":")}
+                    </div>
+                    <span className="text-xs text-gray-500 dark:text-gray-400">
+                      {groupedResults[ratioKey].length} images
+                    </span>
                   </div>
-                  <a
-                    href={result.gcs_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="absolute inset-0 bg-black bg-opacity-0 hover:bg-opacity-50 transition-all flex items-center justify-center opacity-0 group-hover:opacity-100 rounded-lg"
-                  >
-                    <span className="text-white font-semibold">View Full</span>
-                  </a>
+                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                    {groupedResults[ratioKey].map((result: any, idx: number) => (
+                      <div key={`${ratioKey}-${idx}`} className="relative group">
+                        <img
+                          src={result.gcs_url}
+                          alt={`Generated ${idx + 1}`}
+                          className="w-full h-48 object-cover rounded-lg border-2 border-green-200 dark:border-green-700"
+                        />
+                        <div className="absolute top-2 right-2 flex flex-col items-end gap-1">
+                          <span className="bg-black bg-opacity-75 text-white text-[11px] px-2 py-1 rounded">
+                            Var {result.variation}
+                          </span>
+                          {result.original_index !== undefined && (
+                            <span className="bg-gray-800 bg-opacity-80 text-white text-[11px] px-2 py-1 rounded">
+                              Img {result.original_index}
+                            </span>
+                          )}
+                        </div>
+                        <a
+                          href={result.gcs_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="absolute inset-0 bg-black bg-opacity-0 hover:bg-opacity-50 transition-all flex items-center justify-center opacity-0 group-hover:opacity-100 rounded-lg"
+                        >
+                          <span className="text-white font-semibold">View Full</span>
+                        </a>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               ))}
             </div>

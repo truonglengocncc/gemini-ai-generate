@@ -121,6 +121,11 @@ async def handle_automatic_mode(input_data: Dict[str, Any]) -> Dict[str, Any]:
                     timestamp = int(time.time() * 1000)
                     unique_id = f"{timestamp}_{idx}_{variation}"
                     path_prefix = f"{job_id}/processed" if job_id else "processed"
+                    # prepend global path prefix if provided
+                    if gcs_config:
+                        prefix = gcs_config.get("path_prefix") or gcs_config.get("path_prefixes") or gcs_config.get("root_prefix")
+                        if prefix:
+                            path_prefix = f"{prefix.rstrip('/')}/{path_prefix}"
                     
                     gcs_url = await upload_to_gcs_async(
                         gcs_client,
@@ -223,6 +228,9 @@ async def handle_semi_automatic_mode(input_data: Dict[str, Any]) -> Dict[str, An
                             timestamp = int(time.time() * 1000)
                             unique_id = f"{timestamp}_{img_idx}_{prompt_idx}_{gen_idx}"
                             path_prefix = f"{job_id}/processed" if job_id else "processed"
+                            prefix = gcs_config.get("path_prefix") or gcs_config.get("path_prefixes") or gcs_config.get("root_prefix")
+                            if prefix:
+                                path_prefix = f"{prefix.rstrip('/')}/{path_prefix}"
                             
                             gcs_url = await upload_to_gcs_async(
                                 gcs_client,
@@ -497,18 +505,16 @@ def _list_files_from_gcs_folder_sync(gcs_client, bucket_name, folder_path, gcs_c
     
     file_urls = []
     for blob in blobs:
-        if blob.name.endswith("/"): continue
+        if blob.name.endswith("/"):
+            continue
         if not any(blob.name.lower().endswith(ext) for ext in ['.jpg', '.jpeg', '.png', '.webp']):
             continue
 
+        # Public URL first (objects are uploaded public). Avoid signed URLs to prevent 400.
         if cdn_url:
             file_urls.append(f"{cdn_url}/{blob.name}")
         else:
-            try:
-                url = blob.generate_signed_url(expiration=86400, method="GET")
-                file_urls.append(url)
-            except:
-                file_urls.append(blob.public_url or f"https://storage.googleapis.com/{bucket_name}/{blob.name}")
+            file_urls.append(f"https://storage.googleapis.com/{bucket_name}/{blob.name}")
     return file_urls
 
 async def download_image(image_url: str) -> bytes:
@@ -531,15 +537,20 @@ async def upload_to_gcs_async(gcs_client, image_bytes, gcs_config, filename) -> 
     return await loop.run_in_executor(None, upload_to_gcs_sync, gcs_client, gcs_config.get("bucket_name"), filename, image_bytes, gcs_config)
 
 def upload_to_gcs_sync(gcs_client, bucket_name, blob_path, image_bytes, gcs_config=None) -> str:
+    # Prepend path prefix if provided
+    if gcs_config:
+        prefix = gcs_config.get("path_prefix") or gcs_config.get("path_prefixes") or gcs_config.get("root_prefix")
+        if prefix:
+            blob_path = f"{prefix.rstrip('/')}/{blob_path.lstrip('/')}"
+
     bucket = gcs_client.bucket(bucket_name)
     blob = bucket.blob(blob_path)
     blob.upload_from_string(image_bytes, content_type="image/jpeg")
-    if gcs_config and gcs_config.get("cdn_url"):
-        return f"{gcs_config.get('cdn_url').rstrip('/')}/{blob_path}"
-    try:
-        return blob.generate_signed_url(expiration=86400, method="GET")
-    except:
-        return f"https://storage.googleapis.com/{bucket_name}/{blob_path}"
+    # Always return public GCS URL (objects are uploaded public)
+    cdn = gcs_config.get("cdn_url") if gcs_config else None
+    if cdn:
+        return f"{cdn.rstrip('/')}/{blob_path}"
+    return f"https://storage.googleapis.com/{bucket_name}/{blob_path}"
 
 def adjust_concurrency(current_concurrency: int) -> int:
     return 20 if current_concurrency < 20 else current_concurrency

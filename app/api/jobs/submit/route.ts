@@ -74,13 +74,19 @@ export async function POST(request: NextRequest) {
       },
     });
 
+    // Normalize folder for worker (include path prefix)
+    const pathPrefix = (process.env.GCS_PATH_PREFIX || "gemini-generate").replace(/\/+$/, "");
+    const folderForWorker = folder.startsWith(pathPrefix)
+      ? folder
+      : `${pathPrefix}/${folder.replace(/^\/+/, "")}`;
+
     // Submit to RunPod Serverless (async)
     // Note: Automatic mode with batch API is handled in /api/jobs/submit-batch (Next.js)
     // This route is for semi-automatic mode and regular automatic mode (via RunPod)
     // GCS config will be automatically added from env in submitToRunPod
     submitToRunPod(jobId, {
       mode,
-      folder, // GCS folder path (worker will list all files from this folder)
+      folder: folderForWorker, // GCS folder path (worker will list all files from this folder)
       prompts,
       config: configWithModel,
       // Only include gcs_config if explicitly provided (not recommended)

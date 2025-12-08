@@ -15,6 +15,7 @@ export async function POST(request: NextRequest) {
       jobId: providedJobId,
       folder, // GCS folder path (e.g., "job_123/upload")
       prompts,
+      prompt_template, // optional template string with {a,b}
       config = {},
       model, // Model name (e.g., "gemini-2.5-flash-image")
       file_uris, // (optional) legacy
@@ -40,6 +41,19 @@ export async function POST(request: NextRequest) {
     if ((!inline_data || inline_data.length === 0) && (!gcs_files || gcs_files.length === 0)) {
       return NextResponse.json(
         { error: "Missing inline_data or gcs_files. Upload must include images." },
+        { status: 400 }
+      );
+    }
+
+    // Expand prompt variables (cartesian product of comma-separated lists inside {})
+    const promptTemplate =
+      prompt_template ||
+      (Array.isArray(prompts) ? prompts[0] : prompts) ||
+      "";
+    const expandedPrompts = expandPromptTemplate(promptTemplate);
+    if (!expandedPrompts.length) {
+      return NextResponse.json(
+        { error: "Prompt is required" },
         { status: 400 }
       );
     }
@@ -71,12 +85,13 @@ export async function POST(request: NextRequest) {
     }
 
     // Get prompt
-    const prompt = Array.isArray(prompts) && prompts.length > 0 ? prompts[0] : prompts;
-
-    // Include model in config if provided
-    const configWithModel = model 
-      ? { ...config, model }
-      : config;
+    // Include model & prompt metadata in config if provided
+    const configWithModel = {
+      ...config,
+      ...(model ? { model } : {}),
+      ...(promptTemplate ? { prompt_template: promptTemplate } : {}),
+      prompt_combinations: expandedPrompts.length,
+    };
 
     // Create job record in database
     const job = await prisma.job.create({
@@ -86,7 +101,7 @@ export async function POST(request: NextRequest) {
         mode: "automatic",
         status: "batch_submitted", // Will be updated when batch completes
         images: imageUrls,
-        prompts: prompts ? (Array.isArray(prompts) ? prompts : [prompts]) : undefined,
+        prompts: expandedPrompts,
         config: configWithModel || undefined,
       },
     });
@@ -108,7 +123,7 @@ export async function POST(request: NextRequest) {
       const batchJobName = await createBatchJob(
         apiKey,
         gcs_files || [],
-        prompt,
+        expandedPrompts,
         model || configWithModel.model || "gemini-2.5-flash-image",
         configWithModel,
         jobId,
@@ -167,7 +182,7 @@ export async function POST(request: NextRequest) {
 async function createBatchJob(
   apiKey: string,
   gcsFiles: Array<{ index: number; gcsPath: string; contentType?: string; publicUrl?: string }>,
-  prompt: string,
+  prompts: string[],
   model: string,
   config: any,
   jobId: string,
@@ -175,7 +190,9 @@ async function createBatchJob(
 ): Promise<string> {
   const numVariations = config.num_variations || 1;
   const resolution = config.resolution;
-  const aspectRatio = config.aspect_ratio;
+  const aspectRatios: string[] = Array.isArray(config.aspect_ratios) && config.aspect_ratios.length
+    ? config.aspect_ratios
+    : [config.aspect_ratio || "1:1"];
 
   // Prefer inlineData passed from upload; if absent, download from GCS
   let inlineImages = (inlineData || []).sort((a, b) => a.index - b.index);
@@ -209,34 +226,39 @@ async function createBatchJob(
 
   // Create JSONL batch requests with inlineData
   const batchRequests: any[] = [];
-  for (const img of inlineImages) {
-    for (let variation = 0; variation < numVariations; variation++) {
-      const requestObj: any = {
-        contents: [{
-          parts: [
-            { inlineData: img.inlineData },
-            { text: prompt }
-          ],
-          role: "user"
-        }],
-        generationConfig: {
-          responseModalities: ["IMAGE"]
+  prompts.forEach((prompt, promptIdx) => {
+    for (const img of inlineImages) {
+      for (const ratio of aspectRatios) {
+        const ratioSlug = ratio.replace(/:/g, "x");
+        for (let variation = 0; variation < numVariations; variation++) {
+          const requestObj: any = {
+            contents: [{
+              parts: [
+                { inlineData: img.inlineData },
+                { text: prompt }
+              ],
+              role: "user"
+            }],
+            generationConfig: {
+              responseModalities: ["IMAGE"]
+            }
+          };
+
+          if (model === "gemini-3-pro-image-preview") {
+            requestObj.generationConfig.imageConfig = {
+              aspectRatio: ratio,
+              imageSize: (resolution || "1K").toUpperCase()
+            };
+          }
+
+          batchRequests.push({
+            key: `r${ratioSlug}_p${promptIdx}_image_${img.index}_variation_${variation}`,
+            request: requestObj
+          });
         }
-      };
-
-      if (model === "gemini-3-pro-image-preview") {
-        requestObj.generationConfig.imageConfig = {
-          aspectRatio: aspectRatio || "1:1",
-          imageSize: (resolution || "1K").toUpperCase()
-        };
       }
-
-      batchRequests.push({
-        key: `image_${img.index}_variation_${variation}`,
-        request: requestObj
-      });
     }
-  }
+  });
 
   const jsonlContent = batchRequests.map(req => JSON.stringify(req)).join("\n");
   const jsonlBuffer = Buffer.from(jsonlContent, "utf-8");
@@ -291,6 +313,41 @@ function normalizeFileUri(fileUri: string): string {
 function truncateError(msg: string, max: number = 180) {
   if (!msg) return "";
   return msg.length > max ? `${msg.slice(0, max - 3)}...` : msg;
+}
+
+function expandPromptTemplate(template: string): string[] {
+  if (!template) return [];
+  const regex = /\{([^{}]+)\}/g;
+  const segments: string[] = [];
+  const variables: string[][] = [];
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = regex.exec(template)) !== null) {
+    segments.push(template.slice(lastIndex, match.index));
+    const options = match[1]
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    variables.push(options.length ? options : [""]);
+    lastIndex = regex.lastIndex;
+  }
+  segments.push(template.slice(lastIndex));
+
+  if (!variables.length) return [template];
+
+  const results: string[] = [];
+  const build = (idx: number, current: string) => {
+    if (idx === variables.length) {
+      results.push(current + segments[idx]);
+      return;
+    }
+    for (const opt of variables[idx]) {
+      build(idx + 1, current + segments[idx] + opt);
+    }
+  };
+  build(0, "");
+  return results;
 }
 
 

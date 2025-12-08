@@ -10,7 +10,9 @@ export default function AutomaticPage() {
   const [numVariations, setNumVariations] = useState(4);
   const [model, setModel] = useState("gemini-3-pro-image-preview");
   const [resolution, setResolution] = useState("1K");
-  const [aspectRatio, setAspectRatio] = useState("1:1");
+  const [aspectRatios, setAspectRatios] = useState<string[]>(["1:1"]);
+  const [promptCombos, setPromptCombos] = useState(0);
+  const [expandedPrompts, setExpandedPrompts] = useState<string[]>([]);
   const [groupId, setGroupId] = useState("");
   const [groupName, setGroupName] = useState("");
   const [groups, setGroups] = useState<Array<{ id: string; name: string; jobCount?: number }>>([]);
@@ -60,6 +62,13 @@ export default function AutomaticPage() {
     loadGroups();
   }, []);
 
+  // Recompute prompt combinations whenever prompt changes
+  useEffect(() => {
+    const combos = expandPromptTemplate(prompt);
+    setExpandedPrompts(combos);
+    setPromptCombos(combos.length);
+  }, [prompt]);
+
   const createGroup = async (name?: string) => {
     try {
       const response = await fetch("/api/groups", {
@@ -85,6 +94,11 @@ export default function AutomaticPage() {
       return;
     }
 
+    if (promptCombos === 0) {
+      alert("Prompt is empty after parsing. Please enter a prompt.");
+      return;
+    }
+
     setLoading(true);
     try {
       // Create group if needed
@@ -97,7 +111,7 @@ export default function AutomaticPage() {
       }
 
       // Generate jobId with resolution + aspect ratio for easy identification
-      const ratioSlug = aspectRatio.replace(/:/g, "x");
+      const ratioSlug = (aspectRatios[0] || "1:1").replace(/:/g, "x");
       const generatedJobId = `job_${(resolution || "res").toLowerCase()}_${ratioSlug}_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
       setJobId(generatedJobId);
 
@@ -145,12 +159,17 @@ export default function AutomaticPage() {
           groupId: currentGroupId,
           jobId: generatedJobId,
           folder: `${generatedJobId}/upload`,
-          prompts: [prompt],
+          prompts: expandedPrompts,
+          prompt_template: prompt,
           model: model,
           gcs_files: gcsFiles,
           config: {
             num_variations: numVariations,
-            ...(model === "gemini-3-pro-image-preview" && { resolution, aspect_ratio: aspectRatio }),
+            ...(model === "gemini-3-pro-image-preview" && {
+              resolution,
+              aspect_ratio: aspectRatios[0] || "1:1",
+              aspect_ratios: aspectRatios,
+            }),
           },
         }),
       });
@@ -163,7 +182,9 @@ export default function AutomaticPage() {
       setNumVariations(4);
       setModel("gemini-3-pro-image-preview");
       setResolution("1K");
-      setAspectRatio("1:1");
+      setAspectRatios(["1:1"]);
+      setPromptCombos(0);
+      setExpandedPrompts([]);
       setFileInputKey(prev => prev + 1); // Reset file input
       
       // Keep jobId for redirect, but clear groupId/name
@@ -321,8 +342,20 @@ export default function AutomaticPage() {
             />
             {prompt.length > 0 && (
               <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
-                {prompt.length} characters
+                {prompt.length} characters · {promptCombos || 1} prompt
+                {promptCombos > 1 ? "s" : ""}
               </p>
+            )}
+            {promptCombos > 1 && (
+              <div className="mt-3 text-xs text-purple-700 dark:text-purple-300 bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 rounded-lg p-3">
+                Detected {promptCombos} combinations from variables in braces. Example expanded prompts:
+                <ul className="list-disc ml-4 mt-2 space-y-1">
+                  {expandedPrompts.slice(0, 3).map((p, idx) => (
+                    <li key={idx} className="font-mono text-[11px] break-words">{p}</li>
+                  ))}
+                  {expandedPrompts.length > 3 && <li className="italic">...and {expandedPrompts.length - 3} more</li>}
+                </ul>
+              </div>
             )}
           </div>
 
@@ -353,10 +386,19 @@ export default function AutomaticPage() {
                 max="20"
                 disabled={loading}
               />
-              <div className="mt-3 p-3 bg-gradient-to-r from-green-50 to-blue-50 dark:from-green-900/20 dark:to-blue-900/20 rounded-lg">
-                <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
-                  Total: <span className="text-green-600 dark:text-green-400 font-bold">{files.length} × {numVariations} = {files.length * numVariations}</span> images
-                </p>
+                <div className="mt-3 p-3 bg-gradient-to-r from-green-50 to-blue-50 dark:from-green-900/20 dark:to-blue-900/20 rounded-lg">
+                  <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
+                    Total requests:{" "}
+                    <span className="text-green-600 dark:text-green-400 font-bold">
+                    {files.length} images × {numVariations} variations × {aspectRatios.length} ratios × {promptCombos || 1} prompts ={" "}
+                    {files.length * numVariations * aspectRatios.length * (promptCombos || 1)}
+                    </span>
+                  </p>
+                  {promptCombos > 1 && (
+                    <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">
+                      Prompts expanded from variables in braces &#123;option1, option2&#125;
+                  </p>
+                )}
               </div>
             </div>
 
@@ -405,25 +447,52 @@ export default function AutomaticPage() {
                   </div>
                   <div>
                     <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 mb-2">
-                      Aspect Ratio
+                      Aspect Ratios (multi-select)
                     </label>
-                    <select
-                      value={aspectRatio}
-                      onChange={(e) => setAspectRatio(e.target.value)}
-                      className="w-full p-2 border-2 border-gray-200 dark:border-zinc-700 rounded-lg bg-gray-50 dark:bg-zinc-800/50 focus:border-orange-500 dark:focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-200 dark:focus:ring-orange-900/50 transition-all text-sm"
-                      disabled={loading}
-                    >
-                      <option value="1:1">1:1 (Square)</option>
-                      <option value="2:3">2:3 (Portrait)</option>
-                      <option value="3:2">3:2 (Landscape)</option>
-                      <option value="3:4">3:4 (Portrait)</option>
-                      <option value="4:3">4:3 (Landscape)</option>
-                      <option value="4:5">4:5 (Portrait)</option>
-                      <option value="5:4">5:4 (Landscape)</option>
-                      <option value="9:16">9:16 (Vertical)</option>
-                      <option value="16:9">16:9 (Widescreen)</option>
-                      <option value="21:9">21:9 (Ultrawide)</option>
-                    </select>
+                    <div className="grid grid-cols-2 gap-2 text-sm">
+                      {[
+                        "1:1",
+                        "2:3",
+                        "3:2",
+                        "3:4",
+                        "4:3",
+                        "4:5",
+                        "5:4",
+                        "9:16",
+                        "16:9",
+                        "21:9",
+                      ].map((ratio) => {
+                        const checked = aspectRatios.includes(ratio);
+                        return (
+                          <label
+                            key={ratio}
+                            className={`flex items-center gap-2 border rounded-lg px-3 py-2 cursor-pointer ${
+                              checked
+                                ? "border-orange-500 bg-orange-50 dark:bg-orange-900/20"
+                                : "border-gray-200 dark:border-zinc-700"
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() => {
+                                setAspectRatios((prev) =>
+                                  checked
+                                    ? prev.filter((r) => r !== ratio)
+                                    : [...prev, ratio]
+                                );
+                              }}
+                              className="accent-orange-500"
+                              disabled={loading}
+                            />
+                            <span>{ratio}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                    {aspectRatios.length === 0 && (
+                      <p className="text-xs text-red-600 mt-1">Select at least one ratio.</p>
+                    )}
                   </div>
                 </div>
               )}
@@ -436,7 +505,7 @@ export default function AutomaticPage() {
           {/* Submit Button */}
           <button
             type="submit"
-            disabled={loading || files.length === 0 || !prompt}
+          disabled={loading || files.length === 0 || !prompt}
             className="w-full py-4 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white font-semibold rounded-xl shadow-lg hover:shadow-xl transform hover:scale-[1.02] transition-all disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none disabled:hover:shadow-lg flex items-center justify-center gap-2"
           >
             {loading ? (
@@ -450,7 +519,7 @@ export default function AutomaticPage() {
             ) : (
               <>
                 <span className="text-xl">✨</span>
-                Generate {files.length * numVariations} Images
+                Generate {files.length * numVariations * aspectRatios.length * (promptCombos || 1)} Images
               </>
             )}
           </button>
@@ -483,4 +552,41 @@ export default function AutomaticPage() {
       </div>
     </div>
   );
+}
+
+// Expand prompt variables defined as comma-separated lists inside curly braces.
+// Example: "a {red, blue} {cat, dog}" -> ["a red cat", "a red dog", "a blue cat", "a blue dog"]
+function expandPromptTemplate(template: string): string[] {
+  if (!template) return [];
+  const regex = /\{([^{}]+)\}/g;
+  const segments: string[] = [];
+  const variables: string[][] = [];
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = regex.exec(template)) !== null) {
+    segments.push(template.slice(lastIndex, match.index));
+    const options = match[1]
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    variables.push(options.length ? options : [""]);
+    lastIndex = regex.lastIndex;
+  }
+  segments.push(template.slice(lastIndex));
+
+  if (!variables.length) return [template];
+
+  const results: string[] = [];
+  const build = (idx: number, current: string) => {
+    if (idx === variables.length) {
+      results.push(current + segments[idx]);
+      return;
+    }
+    for (const opt of variables[idx]) {
+      build(idx + 1, current + segments[idx] + opt);
+    }
+  };
+  build(0, "");
+  return results;
 }
