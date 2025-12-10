@@ -44,7 +44,7 @@ export async function POST(request: NextRequest) {
         const bucket = storage.bucket(gcsConfig.bucket_name);
         const pathPrefix = (process.env.GCS_PATH_PREFIX || "gemini-generate").replace(/\/+$/, "");
         const prefix = `${pathPrefix}/${folder}${folder.endsWith("/") ? "" : "/"}`;
-        const useCdn = false; // public GCS
+        // const useCdn = false; // public GCS
 
         const [files] = await bucket.getFiles({ prefix });
         imageUrls = files
@@ -62,7 +62,7 @@ export async function POST(request: NextRequest) {
       : config;
 
     // Create job record in database
-    const job = await prisma.job.create({
+    await prisma.job.create({
       data: {
         id: jobId,
         groupId,

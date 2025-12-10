@@ -20,7 +20,7 @@ export default function SemiAutomaticPage() {
   const [groups, setGroups] = useState<Group[]>([]);
   const [selectedGroupId, setSelectedGroupId] = useState("");
   const [newGroupName, setNewGroupName] = useState("");
-  const [submitGroupName, setSubmitGroupName] = useState("");
+  // const [submitGroupName, setSubmitGroupName] = useState("");
   const [refImages, setRefImages] = useState<File[]>([]);
   const [prompts, setPrompts] = useState<Prompt[]>([{ text: "", countPerRef: 1 }]);
   const [model, setModel] = useState("gemini-3-pro-image-preview");
@@ -34,10 +34,11 @@ export default function SemiAutomaticPage() {
   const queueLimit = 10;
   const queueScrollRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    loadGroups();
-    loadQueue(true); // Load initial 10 items
-  }, []);
+useEffect(() => {
+  loadGroups();
+  loadQueue(true); // Load initial 10 items
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, []);
 
   // Scroll listener for lazy loading
   useEffect(() => {

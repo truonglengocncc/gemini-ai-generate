@@ -76,9 +76,9 @@ export default function AutomaticPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: name || `Auto-${Date.now()}` }),
       });
-      const data = await response.json();
-      setGroupId(data.id);
-      return data.id;
+      const resJson = await response.json();
+      setGroupId(resJson.id);
+      return resJson.id;
     } catch (error) {
       console.error("Failed to create group:", error);
       return null;
@@ -100,6 +100,7 @@ export default function AutomaticPage() {
     }
 
     setLoading(true);
+    setJobId(null); // hide success banner until submission actually succeeds
     try {
       // Create group if needed
       let currentGroupId = groupId;
@@ -113,7 +114,6 @@ export default function AutomaticPage() {
       // Generate jobId with resolution + aspect ratio for easy identification
       const ratioSlug = (aspectRatios[0] || "1:1").replace(/:/g, "x");
       const generatedJobId = `job_${(resolution || "res").toLowerCase()}_${ratioSlug}_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
-      setJobId(generatedJobId);
 
       // Presign GCS URLs then upload directly from client
       const presignRes = await fetch("/api/upload/presign", {
@@ -174,7 +174,8 @@ export default function AutomaticPage() {
         }),
       });
 
-      const data = await response.json();
+      await response.json();
+      setJobId(generatedJobId); // show success banner only after all API calls succeed
       
       // Clear form state
       setFiles([]);

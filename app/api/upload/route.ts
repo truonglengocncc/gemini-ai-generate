@@ -48,7 +48,7 @@ async function uploadToGcs(
 
   // Use CDN URL if configured, otherwise use signed URL (1 day) or public URL
   // Use public GCS URL (CDN currently disabled/broken)
-  const cdnUrl = null; // use public GCS
+  // const cdnUrl = null; // use public GCS
 
   // Generate signed URL (valid for 1 day) or use public URL
   try {

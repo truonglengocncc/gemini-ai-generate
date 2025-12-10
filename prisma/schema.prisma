@@ -50,5 +50,5 @@ model Job {
   @@index([groupId])
   @@index([status])
   @@index([runpodJobId])
+  @@index([createdAt])
 }
-

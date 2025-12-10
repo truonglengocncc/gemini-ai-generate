@@ -22,7 +22,7 @@ export default function GroupDetailPage() {
 
   useEffect(() => {
     loadGroupDetails();
-  }, [groupId]);
+  }, [groupId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadGroupDetails = async () => {
     try {
@@ -173,4 +173,3 @@ export default function GroupDetailPage() {
     </div>
   );
 }
-

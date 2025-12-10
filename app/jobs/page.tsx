@@ -82,7 +82,7 @@ export default function JobsPage() {
 
   useEffect(() => {
     fetchJobs();
-  }, [page, statusFilter]);
+  }, [page, statusFilter]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -145,7 +145,10 @@ export default function JobsPage() {
       </div>
 
       {loading && jobs.length === 0 ? (
-        <div className="text-center py-12 text-gray-900 dark:text-gray-100">Loading jobs...</div>
+        <div className="text-center py-12 text-gray-900 dark:text-gray-100 flex flex-col items-center gap-3">
+          <div className="h-10 w-10 border-4 border-blue-500/40 border-t-blue-600 rounded-full animate-spin" />
+          <span className="text-lg font-medium">Loading jobs...</span>
+        </div>
       ) : jobs.length === 0 ? (
         <div className="text-center py-12 text-gray-500 dark:text-gray-400">No jobs found</div>
       ) : (

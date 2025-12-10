@@ -31,7 +31,7 @@ export async function POST(request: NextRequest) {
     const storage = new Storage({ credentials });
     const bucket = storage.bucket(bucketName);
     const prefix = (process.env.GCS_PATH_PREFIX || "gemini-generate").replace(/\/+$/, "");
-    const useCdn = false; // CDN disabled, use public GCS URL
+    // const useCdn = false; // CDN disabled, use public GCS URL
 
     const uploads = await Promise.all(
       files.map(async (file) => {

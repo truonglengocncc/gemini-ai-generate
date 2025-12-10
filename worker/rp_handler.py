@@ -27,16 +27,152 @@ async def handler(job):
     
     mode = input_data.get('mode')
     
-    # Note: Automatic mode with batch API is now handled in Next.js directly
-    # RunPod worker only handles regular automatic mode and semi-automatic mode
     if mode == 'automatic':
         return await handle_automatic_mode(input_data)
     elif mode == 'semi-automatic':
         return await handle_semi_automatic_mode(input_data)
+    elif mode == 'automatic_batch':
+        return await handle_automatic_batch_mode(input_data)
+    elif mode == 'fetch_results':
+        return await handle_fetch_results_mode(input_data)
     else:
         return {
             "error": f"Invalid mode: {mode}"
         }
+
+# ---------------------------------------------------------------------------- #
+#                           Automatic Batch (Gemini)                           #
+# ---------------------------------------------------------------------------- #
+
+async def handle_automatic_batch_mode(input_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Submit Gemini Batch API job(s) from worker.
+    - Builds JSONL requests (with chunking) from prompts x images x ratios x variations.
+    - Uploads JSONL via Files API and creates batch jobs.
+    - Returns immediately with batch_job_names; no polling to save cost.
+    """
+    job_id = input_data.get("job_id") or input_data.get("jobId") or f"job_{int(time.time())}"
+    config = input_data.get("config", {}) or {}
+    prompts = input_data.get("prompts") or []
+    prompt_template = input_data.get("prompt_template")
+    model_name = input_data.get("model") or config.get("model") or "gemini-2.5-flash-image"
+    num_variations = config.get("num_variations", 1)
+    resolution = config.get("resolution")  # e.g., 1K/2K/4K for gemini-3-pro-image-preview
+    aspect_ratios = config.get("aspect_ratios") or [config.get("aspect_ratio") or "1:1"]
+    gcs_files = input_data.get("gcs_files") or []
+    image_urls = input_data.get("image_urls") or []
+    inline_data = input_data.get("inline_data") or []
+    gcs_config = input_data.get("gcs_config")
+
+    api_key = input_data.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        return {"status": "failed", "error": "Missing GEMINI_API_KEY"}
+
+    # Expand prompt variables if template provided
+    expanded_prompts = expand_prompt_template(prompt_template) if prompt_template else (prompts if isinstance(prompts, list) else [prompts])
+    if not expanded_prompts:
+        return {"status": "failed", "error": "Prompt is required"}
+
+    # Load inline images (prefer inline_data passed from client; else download from GCS using gcs_files)
+    inline_images = sorted(inline_data, key=lambda x: x.get("index", 0))
+    if not inline_images:
+        if image_urls:
+            inline_images = await load_inline_images_from_urls(image_urls)
+        elif gcs_files:
+            inline_images = await load_inline_images_from_gcs(gcs_files, gcs_config)
+        else:
+            return {"status": "failed", "error": "No images provided"}
+    if not inline_images:
+        return {"status": "failed", "error": "No images found to batch"}
+
+    client = genai.Client(api_key=api_key)
+
+    MAX_JSONL_BYTES = 12 * 1024 * 1024  # stay under 20MB limit
+    MAX_REQUESTS = 200
+
+    batch_names: List[str] = []
+    request_keys: List[str] = []
+    current_lines: List[str] = []
+    current_size = 0
+
+    def flush_chunk(chunk_idx: int):
+        nonlocal current_lines, current_size, batch_names
+        if not current_lines:
+            return
+        jsonl_content = "\n".join(current_lines)
+        jsonl_bytes = jsonl_content.encode("utf-8")
+        import tempfile, os
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".jsonl") as tmp:
+            tmp.write(jsonl_bytes)
+            tmp_path = tmp.name
+        try:
+            uploaded = client.files.upload(
+                file=tmp_path,
+                config=types.UploadFileConfig(mime_type="application/jsonl", display_name=f"batch_requests_{job_id}_{chunk_idx}"),
+            )
+        finally:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+        file_uri = normalize_file_uri(getattr(uploaded, "uri", None) or getattr(uploaded, "name", None))
+        batch = client.batches.create(
+            model=model_name,
+            src=file_uri,
+            config={"display_name": f"batch-job-{job_id}-{chunk_idx}"},
+        )
+        batch_name = getattr(batch, "name", None) or getattr(batch, "batch", {}).get("name")
+        if batch_name:
+            batch_names.append(batch_name)
+        # reset
+        current_lines = []
+        current_size = 0
+
+    request_count = 0
+    for prompt_idx, prompt in enumerate(expanded_prompts):
+        for img in inline_images:
+            for ratio in aspect_ratios:
+                ratio_slug = str(ratio).replace(":", "x")
+                for variation in range(num_variations):
+                    request_obj = {
+                        "contents": [{
+                            "role": "user",
+                            "parts": [
+                                {"inlineData": img.get("inlineData") or img.get("inline_data")},
+                                {"text": prompt},
+                            ],
+                        }],
+                        "generationConfig": {
+                            "responseModalities": ["IMAGE"],
+                        },
+                    }
+                    if model_name == "gemini-3-pro-image-preview":
+                        request_obj["generationConfig"]["imageConfig"] = {
+                            "aspectRatio": ratio,
+                            "imageSize": (resolution or "1K").upper(),
+                        }
+                    key = f"r{ratio_slug}_p{prompt_idx}_img{img.get('index',0)}_var{variation}"
+                    line = json.dumps({
+                        "key": key,
+                        "request": request_obj,
+                    })
+                    request_keys.append(key)
+                    line_size = len(line.encode("utf-8"))
+                    if (current_size + line_size > MAX_JSONL_BYTES) or (request_count >= MAX_REQUESTS):
+                        flush_chunk(len(batch_names))
+                        request_count = 0
+                    current_lines.append(line)
+                    current_size += line_size
+                    request_count += 1
+
+    # flush remaining
+    flush_chunk(len(batch_names))
+
+    return {
+        "status": "batch_submitted",
+        "batch_job_names": batch_names,
+        "request_keys": request_keys,
+    }
 
 async def handle_automatic_mode(input_data: Dict[str, Any]) -> Dict[str, Any]:
     """Handle automatic mode: batch process large image sets
@@ -551,6 +687,193 @@ def upload_to_gcs_sync(gcs_client, bucket_name, blob_path, image_bytes, gcs_conf
     if cdn:
         return f"{cdn.rstrip('/')}/{blob_path}"
     return f"https://storage.googleapis.com/{bucket_name}/{blob_path}"
+
+def expand_prompt_template(template: str) -> List[str]:
+    if not template:
+        return []
+    regex = r"\{([^{}]+)\}"
+    segments = []
+    variables = []
+    last = 0
+    import re
+    for m in re.finditer(regex, template):
+        segments.append(template[last:m.start()])
+        options = [s.strip() for s in m.group(1).split(",") if s.strip()]
+        variables.append(options or [""])
+        last = m.end()
+    segments.append(template[last:])
+    if not variables:
+        return [template]
+    results = []
+    def build(idx: int, current: str):
+        if idx == len(variables):
+            results.append(current + segments[idx])
+            return
+        for opt in variables[idx]:
+            build(idx + 1, current + segments[idx] + opt)
+    build(0, "")
+    return results
+
+async def load_inline_images_from_gcs(gcs_files: List[Dict[str, Any]], gcs_config: Dict[str, Any]) -> List[Dict[str, Any]]:
+    if not gcs_files:
+        return []
+    inline_images = []
+    for file in sorted(gcs_files, key=lambda x: x.get("index", 0)):
+        # Prefer direct publicUrl if available to avoid extra auth
+        public_url = file.get("publicUrl") or file.get("public_url")
+        if public_url:
+            data = await download_image(public_url)
+            mime = file.get("contentType") or "image/jpeg"
+        else:
+            if not gcs_config:
+                continue
+            gcs_client = initialize_gcs_client(gcs_config)
+            bucket = gcs_client.bucket(gcs_config.get("bucket_name"))
+            prefix = gcs_config.get("path_prefix") or gcs_config.get("path_prefixes") or gcs_config.get("root_prefix") or ""
+            gcs_path = file.get("gcsPath") or file.get("gcs_path") or ""
+            if prefix and not gcs_path.startswith(prefix):
+                gcs_path = f"{prefix.rstrip('/')}/{gcs_path.lstrip('/')}"
+            blob = bucket.blob(gcs_path)
+            data = blob.download_as_bytes()
+            mime = file.get("contentType") or "image/jpeg"
+        inline_images.append({
+            "index": file.get("index", 0),
+            "inlineData": {
+                "mimeType": mime,
+                "data": base64.b64encode(data).decode("utf-8")
+            }
+        })
+    return inline_images
+
+async def load_inline_images_from_urls(urls: List[str]) -> List[Dict[str, Any]]:
+    inline_images = []
+    for idx, url in enumerate(urls):
+        data = await download_image(url)
+        inline_images.append({
+            "index": idx,
+            "inlineData": {
+                "mimeType": "image/jpeg",
+                "data": base64.b64encode(data).decode("utf-8")
+            }
+        })
+    return inline_images
+
+def normalize_file_uri(uri: str) -> str:
+    if not uri:
+        return uri
+    if uri.startswith("http"):
+        import re
+        m = re.search(r"/files/([^/\?]+)", uri)
+        if m:
+            return f"files/{m.group(1)}"
+    if not uri.startswith("files/"):
+        return f"files/{uri}"
+    return uri
+
+# ---------------------------------------------------------------------------- #
+#                         Fetch batch results in worker                        #
+# ---------------------------------------------------------------------------- #
+
+async def handle_fetch_results_mode(input_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Worker downloads Gemini Batch outputs and uploads results to GCS.
+    Returns results in webhook output to avoid Next.js timeouts.
+    """
+    job_id = input_data.get("job_id") or input_data.get("jobId")
+    batch_names = input_data.get("batch_job_names") or input_data.get("batch_names") or []
+    api_key = input_data.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY")
+    gcs_config = input_data.get("gcs_config")
+
+    if not job_id or not batch_names:
+        return {"status": "failed", "error": "Missing job_id or batch_job_names"}
+    if not api_key:
+        return {"status": "failed", "error": "Missing GEMINI_API_KEY"}
+
+    results = []
+    total_bytes = 0
+
+    for name in batch_names:
+        # resolve file name via batch get
+        client = genai.Client(api_key=api_key)
+        batch = client.batches.get(name=name)
+        dest = getattr(batch, "dest", None) or getattr(batch, "output", None)
+        file_name = None
+        if dest:
+            file_name = getattr(dest, "file_name", None) or getattr(dest, "fileName", None) or getattr(dest, "file", None)
+        if not file_name and getattr(batch, "output", None):
+            file_name = getattr(batch.output, "fileUri", None) or getattr(batch.output, "file", None)
+        if not file_name:
+            continue
+
+        file_uri = normalize_file_uri(file_name)
+        download_url = f"https://generativelanguage.googleapis.com/v1beta/{file_uri}:download?alt=media&key={api_key}"
+
+        async with aiohttp.ClientSession() as session:
+            async with session.get(download_url) as resp:
+                if resp.status != 200:
+                    continue
+                text = await resp.text()
+                total_bytes += len(text.encode("utf-8"))
+                for line in text.split("\n"):
+                    if not line.strip():
+                        continue
+                    try:
+                        parsed = json.loads(line)
+                        images = extract_images_from_batch_line(parsed)
+                        results.extend(images)
+                    except Exception:
+                        continue
+
+    # Upload to GCS if configured
+    if gcs_config and results:
+        gcs_client = initialize_gcs_client(gcs_config)
+        uploaded = []
+        for idx, img in enumerate(results):
+            if not img.get("base64"):
+                continue
+            buffer = base64.b64decode(img["base64"])
+            path = f"{job_id}/processed/batch/result_{idx}.png"
+            gcs_url = await upload_to_gcs_async(gcs_client, buffer, gcs_config, path)
+            uploaded.append({
+                "gcs_url": gcs_url,
+                "variation": img.get("variation"),
+                "original_index": img.get("original_index"),
+                "ratio": img.get("ratio"),
+            })
+        results = uploaded
+
+    return {
+        "status": "completed",
+        "results": results,
+        "total_generated": len(results),
+        "total_bytes": total_bytes,
+    }
+
+def extract_images_from_batch_line(parsed: Any) -> List[Dict[str, Any]]:
+    out = []
+    response = parsed.get("response") or parsed
+    candidates = response.get("candidates", [])
+    for cand in candidates:
+        parts = cand.get("content", {}).get("parts", []) or cand.get("parts", [])
+        for part in parts:
+            inline = part.get("inlineData")
+            if inline and inline.get("data"):
+                key = response.get("key") or parsed.get("key") or ""
+                match = None
+                ratio = None
+                if key:
+                    import re
+                    match = re.search(r"r([0-9x]+)_p(\d+)_img(\d+)_var(\d+)", key)
+                    if match:
+                        ratio = match.group(1).replace("x", ":")
+                out.append({
+                    "base64": inline["data"],
+                    "mimeType": inline.get("mimeType", "image/png"),
+                    "ratio": ratio,
+                    "variation": int(match.group(4)) if match else None,
+                    "original_index": int(match.group(3)) if match else None,
+                })
+    return out
 
 def adjust_concurrency(current_concurrency: int) -> int:
     return 20 if current_concurrency < 20 else current_concurrency

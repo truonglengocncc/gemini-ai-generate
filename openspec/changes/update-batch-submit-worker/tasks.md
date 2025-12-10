@@ -1,0 +1,10 @@
+- [x] Đọc proposal và thống nhất phạm vi với reviewer
+- [x] Cập nhật Next.js API: enqueue-only submit, thêm `/api/jobs/[id]/check-batch`
+- [x] Bổ sung webhook handling để nhận `batch_job_name` từ worker
+- [x] Cập nhật worker: route submit batch, chunk JSONL, gửi webhook về Next.js
+- [x] Cập nhật UI job detail: nút Check Batch hoạt động với endpoint mới
+- [x] Kiểm thử: submit batch lớn (chunk), check-batch trả kết quả, download ZIP nhóm
+- [ ] Mở rộng: worker xử lý tải kết quả batch + upload GCS (mode fetch_results) thay cho Next.js
+- [ ] Điều chỉnh check-batch API: enqueue fetch_results tới worker, chỉ fallback nếu cần
+- [ ] Cập nhật webhook để nhận completed với kết quả từ worker
+- [ ] Kiểm thử lại flow mới và cập nhật tài liệu nếu cần

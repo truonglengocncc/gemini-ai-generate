@@ -11,7 +11,6 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
 
-    console.log("Webhook body:", JSON.stringify(body, null, 2));
     // RunPod webhook format: https://docs.runpod.io/serverless/workers/webhooks
     const { id: runpodJobId, status, output, error, input } = body;
     
@@ -50,10 +49,16 @@ export async function POST(request: NextRequest) {
     };
 
     // Handle batch_submitted status (from Batch API)
-    if (output?.status === "batch_submitted" && output?.batch_job_name) {
+    if (output?.status === "batch_submitted" && (output?.batch_job_name || output?.batch_job_names)) {
+      const batchNames = output.batch_job_names || [output.batch_job_name];
+      const requestKeys = output.request_keys || [];
       updateData.status = "batch_submitted";
-      updateData.batchJobName = output.batch_job_name;
-      console.log(`Job ${jobId} batch submitted: ${output.batch_job_name}`);
+      updateData.config = {
+        ...((job.config as any) || {}),
+        batch_job_names: batchNames,
+        request_keys: requestKeys,
+      };
+      console.log(`Job ${jobId} batch submitted: ${batchNames.join(",")}`);
       
       await prisma.job.update({
         where: { id: job.id },
@@ -64,7 +69,7 @@ export async function POST(request: NextRequest) {
         success: true,
         jobId: job.id,
         status: "batch_submitted",
-        batchJobName: output.batch_job_name,
+        batchJobNames: batchNames,
       });
     }
 
@@ -120,7 +125,7 @@ export async function POST(request: NextRequest) {
 /**
  * GET endpoint for webhook verification (if needed by RunPod)
  */
-export async function GET(request: NextRequest) {
+export async function GET(_request: NextRequest) {
   return NextResponse.json({
     message: "RunPod webhook endpoint is active",
   });

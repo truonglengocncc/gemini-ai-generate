@@ -25,6 +25,8 @@ export default function JobDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [checkingBatch, setCheckingBatch] = useState(false);
+  const [showConfig, setShowConfig] = useState(false);
+  const [showUploads, setShowUploads] = useState(true);
 
   const fetchJobDetails = async () => {
     try {
@@ -85,7 +87,15 @@ export default function JobDetailPage() {
     if (id) {
       fetchJobDetails();
     }
-  }, [id]);
+  }, [id]); // eslint-disable-line react-hooks-exhaustive-deps
+
+  // Auto-collapse huge lists to keep UI light
+  useEffect(() => {
+    if (job) {
+      if (job.images.length > 50) setShowUploads(false);
+      if (job.config && Object.keys(job.config).length > 0) setShowConfig(false);
+    }
+  }, [job]);
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -107,7 +117,10 @@ export default function JobDetailPage() {
   if (loading) {
     return (
       <div className="min-h-screen bg-zinc-50 dark:bg-black p-8 flex items-center justify-center">
-        <p className="text-xl">Loading job details...</p>
+        <div className="flex flex-col items-center gap-3 text-gray-700 dark:text-gray-200">
+          <div className="h-10 w-10 border-4 border-blue-500/40 border-t-blue-600 rounded-full animate-spin" />
+          <p className="text-lg font-medium">Loading job details...</p>
+        </div>
       </div>
     );
   }
@@ -215,12 +228,22 @@ export default function JobDetailPage() {
 
           {job.config && Object.keys(job.config).length > 0 && (
             <div className="mb-6">
-              <h3 className="text-lg font-semibold mb-2">Configuration</h3>
-              <div className="bg-gray-50 dark:bg-zinc-800 p-4 rounded">
-                <pre className="text-sm overflow-x-auto">
-                  {JSON.stringify(job.config, null, 2)}
-                </pre>
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="text-lg font-semibold">Configuration</h3>
+                <button
+                  onClick={() => setShowConfig((v) => !v)}
+                  className="text-xs px-3 py-1 rounded border border-gray-300 dark:border-zinc-700 hover:bg-gray-100 dark:hover:bg-zinc-800"
+                >
+                  {showConfig ? "Hide" : "Show"}
+                </button>
               </div>
+              {showConfig && (
+                <div className="bg-gray-50 dark:bg-zinc-800 p-4 rounded">
+                  <pre className="text-sm overflow-x-auto">
+                    {JSON.stringify(job.config, null, 2)}
+                  </pre>
+                </div>
+              )}
             </div>
           )}
 
@@ -237,28 +260,38 @@ export default function JobDetailPage() {
         {/* Uploaded Images Section */}
         {job.images && job.images.length > 0 && (
           <div className="bg-white dark:bg-zinc-900 rounded-lg shadow-md p-6 mb-6">
-            <h2 className="text-2xl font-bold mb-4">
-              Uploaded Images ({job.images.length})
-            </h2>
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-              {job.images.map((url, idx) => (
-                <div key={idx} className="relative group">
-                  <img
-                    src={url}
-                    alt={`Uploaded ${idx + 1}`}
-                    className="w-full h-48 object-cover rounded-lg border-2 border-gray-200 dark:border-zinc-700"
-                  />
-                  <a
-                    href={url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="absolute inset-0 bg-black bg-opacity-0 hover:bg-opacity-50 transition-all flex items-center justify-center opacity-0 group-hover:opacity-100 rounded-lg"
-                  >
-                    <span className="text-white font-semibold">View Full</span>
-                  </a>
-                </div>
-              ))}
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-2xl font-bold">
+                Uploaded Images ({job.images.length})
+              </h2>
+              <button
+                onClick={() => setShowUploads((v) => !v)}
+                className="text-xs px-3 py-1 rounded border border-gray-300 dark:border-zinc-700 hover:bg-gray-100 dark:hover:bg-zinc-800"
+              >
+                {showUploads ? "Hide" : "Show"}
+              </button>
             </div>
+            {showUploads && (
+              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                {job.images.map((url, idx) => (
+                  <div key={idx} className="relative group">
+                    <img
+                      src={url}
+                      alt={`Uploaded ${idx + 1}`}
+                      className="w-full h-48 object-cover rounded-lg border-2 border-gray-200 dark:border-zinc-700"
+                    />
+                    <a
+                      href={url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="absolute inset-0 bg-black bg-opacity-0 hover:bg-opacity-50 transition-all flex items-center justify-center opacity-0 group-hover:opacity-100 rounded-lg"
+                    >
+                      <span className="text-white font-semibold">View Full</span>
+                    </a>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
