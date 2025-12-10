@@ -27,6 +27,7 @@ export default function JobDetailPage() {
   const [checkingBatch, setCheckingBatch] = useState(false);
   const [showConfig, setShowConfig] = useState(false);
   const [showUploads, setShowUploads] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
 
   const fetchJobDetails = async () => {
     try {
@@ -359,9 +360,25 @@ export default function JobDetailPage() {
 
         {job.status === "completed" && generatedImages.length === 0 && (
           <div className="bg-yellow-50 dark:bg-yellow-900/20 p-6 rounded-lg">
-            <p className="text-yellow-800 dark:text-yellow-300">
+            <p className="text-yellow-800 dark:text-yellow-300 mb-3">
               Job completed but no generated images found.
             </p>
+            <button
+              onClick={async () => {
+                setRefreshing(true);
+                try {
+                  await fetch(`/api/jobs/${job.id}/check-batch`, { method: "POST" });
+                  await fetchJobDetails();
+                } catch (err) {
+                  console.error("Failed to refresh from worker", err);
+                }
+                setRefreshing(false);
+              }}
+              className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm font-medium disabled:opacity-60"
+              disabled={refreshing}
+            >
+              {refreshing ? "Refreshing..." : "Fetch results again"}
+            </button>
           </div>
         )}
 
@@ -371,10 +388,19 @@ export default function JobDetailPage() {
               Job is currently processing. Refresh the page to see updates.
             </p>
             <button
-              onClick={fetchJobDetails}
-              className="mt-4 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+              onClick={async () => {
+                setRefreshing(true);
+                try {
+                  await fetch(`/api/jobs/${job.id}/check-batch`, { method: "POST" });
+                  await fetchJobDetails();
+                } finally {
+                  setRefreshing(false);
+                }
+              }}
+              className="mt-4 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-60"
+              disabled={refreshing}
             >
-              Refresh Status
+              {refreshing ? "Refreshing..." : "Fetch results again"}
             </button>
           </div>
         )}
