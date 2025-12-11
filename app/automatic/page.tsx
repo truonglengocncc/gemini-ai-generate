@@ -349,7 +349,7 @@ export default function AutomaticPage() {
             )}
             {promptCombos > 1 && (
               <div className="mt-3 text-xs text-purple-700 dark:text-purple-300 bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 rounded-lg p-3">
-                Detected {promptCombos} combinations from variables in braces. Example expanded prompts:
+                Detected {promptCombos} prompt variants from braces. They will be assigned to images in order (round-robin), not multiplied.
                 <ul className="list-disc ml-4 mt-2 space-y-1">
                   {expandedPrompts.slice(0, 3).map((p, idx) => (
                     <li key={idx} className="font-mono text-[11px] break-words">{p}</li>
@@ -391,15 +391,15 @@ export default function AutomaticPage() {
                   <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
                     Total requests:{" "}
                     <span className="text-green-600 dark:text-green-400 font-bold">
-                    {files.length} images × {numVariations} variations × {aspectRatios.length} ratios × {promptCombos || 1} prompts ={" "}
-                    {files.length * numVariations * aspectRatios.length * (promptCombos || 1)}
+                    {Math.max(files.length, promptCombos || 1)} outputs × {numVariations} variations × {aspectRatios.length} ratios ={" "}
+                    {Math.max(files.length, promptCombos || 1) * numVariations * aspectRatios.length}
                     </span>
                   </p>
                   {promptCombos > 1 && (
                     <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">
-                      Prompts expanded from variables in braces &#123;option1, option2&#125;
-                  </p>
-                )}
+                      Prompt variants will be cycled across outputs (round-robin), not multiplied.
+                    </p>
+                  )}
               </div>
             </div>
 

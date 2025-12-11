@@ -129,41 +129,47 @@ async def handle_automatic_batch_mode(input_data: Dict[str, Any]) -> Dict[str, A
         current_size = 0
 
     request_count = 0
-    for prompt_idx, prompt in enumerate(expanded_prompts):
-        for img in inline_images:
-            for ratio in aspect_ratios:
-                ratio_slug = str(ratio).replace(":", "x")
-                for variation in range(num_variations):
-                    request_obj = {
-                        "contents": [{
-                            "role": "user",
-                            "parts": [
-                                {"inlineData": img.get("inlineData") or img.get("inline_data")},
-                                {"text": prompt},
-                            ],
-                        }],
-                        "generationConfig": {
-                            "responseModalities": ["IMAGE"],
-                        },
+    prompt_len = len(expanded_prompts)
+    total_slots = max(len(inline_images), prompt_len)
+    global_req_idx = 0
+    for slot in range(total_slots):
+        img = inline_images[slot % len(inline_images)]
+        prompt_idx = slot % prompt_len
+        prompt = expanded_prompts[prompt_idx]
+        for ratio in aspect_ratios:
+            ratio_slug = str(ratio).replace(":", "x")
+            for variation in range(num_variations):
+                request_obj = {
+                    "contents": [{
+                        "role": "user",
+                        "parts": [
+                            {"inlineData": img.get("inlineData") or img.get("inline_data")},
+                            {"text": prompt},
+                        ],
+                    }],
+                    "generationConfig": {
+                        "responseModalities": ["IMAGE"],
+                    },
+                }
+                if model_name == "gemini-3-pro-image-preview":
+                    request_obj["generationConfig"]["imageConfig"] = {
+                        "aspectRatio": ratio,
+                        "imageSize": (resolution or "1K").upper(),
                     }
-                    if model_name == "gemini-3-pro-image-preview":
-                        request_obj["generationConfig"]["imageConfig"] = {
-                            "aspectRatio": ratio,
-                            "imageSize": (resolution or "1K").upper(),
-                        }
-                    key = f"r{ratio_slug}_p{prompt_idx}_img{img.get('index',0)}_var{variation}"
-                    line = json.dumps({
-                        "key": key,
-                        "request": request_obj,
-                    })
-                    request_keys.append(key)
-                    line_size = len(line.encode("utf-8"))
-                    if (current_size + line_size > MAX_JSONL_BYTES) or (request_count >= MAX_REQUESTS):
-                        flush_chunk(len(batch_names))
-                        request_count = 0
-                    current_lines.append(line)
-                    current_size += line_size
-                    request_count += 1
+                key = f"r{ratio_slug}_p{prompt_idx}_img{img.get('index',0)}_var{variation}"
+                line = json.dumps({
+                    "key": key,
+                    "request": request_obj,
+                })
+                request_keys.append(key)
+                line_size = len(line.encode("utf-8"))
+                if (current_size + line_size > MAX_JSONL_BYTES) or (request_count >= MAX_REQUESTS):
+                    flush_chunk(len(batch_names))
+                    request_count = 0
+                current_lines.append(line)
+                current_size += line_size
+                request_count += 1
+                global_req_idx += 1
 
     # flush remaining
     flush_chunk(len(batch_names))
