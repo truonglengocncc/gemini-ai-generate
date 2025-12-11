@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import JSZip from "jszip";
 
 interface Group {
   id: string;
@@ -15,6 +16,7 @@ export default function GroupsPage() {
   const [loading, setLoading] = useState(true);
   const [newGroupName, setNewGroupName] = useState("");
   const [creating, setCreating] = useState(false);
+  const [downloading, setDownloading] = useState<string | null>(null);
 
   const loadGroups = async () => {
     try {
@@ -63,6 +65,49 @@ export default function GroupsPage() {
 
   const handleDownload = (groupId: string) => {
     window.location.href = `/api/download/${groupId}`;
+  };
+
+  const handleClientDownload = async (groupId: string, name: string) => {
+    try {
+      setDownloading(groupId);
+      const res = await fetch(`/api/download/${groupId}?mode=list`);
+      if (!res.ok) throw new Error("Failed to fetch file list");
+      const data = await res.json();
+      const files: Array<{ url: string; filename: string }> = data.files || [];
+      const zip = new JSZip();
+
+      let idx = 0;
+      const limit = 8;
+      const worker = async () => {
+        while (idx < files.length) {
+          const current = files[idx++];
+          try {
+            const r = await fetch(current.url);
+            if (!r.ok) continue;
+            const blob = await r.blob();
+            zip.file(current.filename, blob);
+          } catch (e) {
+            console.error("client download failed", current.url, e);
+          }
+        }
+      };
+
+      await Promise.all(
+        Array.from({ length: Math.min(limit, files.length) }, () => worker())
+      );
+
+      const content = await zip.generateAsync({ type: "blob" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(content);
+      a.download = `${name.replace(/[^a-z0-9]/gi, "_") || groupId}_images.zip`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    } catch (e) {
+      console.error("Client ZIP failed", e);
+      alert("Client ZIP failed. Please try server download.");
+    } finally {
+      setDownloading(null);
+    }
   };
 
   return (
@@ -142,7 +187,15 @@ export default function GroupsPage() {
                     className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 text-sm"
                     title="Download all images"
                   >
-                    Download
+                    Server ZIP
+                  </button>
+                  <button
+                    onClick={() => handleClientDownload(group.id, group.name)}
+                    disabled={downloading === group.id}
+                    className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm disabled:opacity-60"
+                    title="Download ZIP in browser"
+                  >
+                    {downloading === group.id ? "Preparing..." : "Client ZIP"}
                   </button>
                 </div>
               </div>
@@ -153,4 +206,3 @@ export default function GroupsPage() {
     </div>
   );
 }
-

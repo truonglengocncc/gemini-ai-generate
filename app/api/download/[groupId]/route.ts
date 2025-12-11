@@ -66,48 +66,43 @@ export async function GET(
       });
     }
 
-    // Create ZIP file in memory with concurrent downloads to reduce timeout
-    const archive = archiver("zip", {
-      zlib: { level: 6 }, // slightly lower for speed
-    });
+    // Download with concurrency limit, then zip (avoids "queue closed" errors)
+    const limit = 6;
+    const executing: Promise<void>[] = [];
+    const downloaded: Array<{ buffer: Buffer; filename: string }> = [];
 
+    const enqueue = async (file: { url: string; filename: string }) => {
+      const p = (async () => {
+        const buf = await downloadWithTimeout(file.url, 20000);
+        if (buf) downloaded.push({ buffer: buf, filename: file.filename });
+      })().finally(() => {
+        const idx = executing.indexOf(p);
+        if (idx >= 0) executing.splice(idx, 1);
+      });
+      executing.push(p);
+      if (executing.length >= limit) {
+        await Promise.race(executing);
+      }
+    };
+
+    for (const f of imageData) {
+      await enqueue(f);
+    }
+    await Promise.all(executing);
+
+    const archive = archiver("zip", {
+      zlib: { level: 6 },
+    });
     const chunks: Buffer[] = [];
     archive.on("data", (chunk) => chunks.push(chunk));
-
     const archiveFinished = new Promise<void>((resolve, reject) => {
       archive.on("end", resolve);
       archive.on("error", reject);
     });
 
-    // simple p-limit
-    const limit = 8;
-    let active = 0;
-    let idx = 0;
-    const queue: Promise<void>[] = [];
-
-    const runNext = async () => {
-      if (idx >= imageData.length) return;
-      const current = imageData[idx++];
-      active++;
-      try {
-        const buffer = await downloadWithTimeout(current.url, 20000);
-        if (buffer) archive.append(buffer, { name: current.filename });
-      } catch (e) {
-        console.warn("Download failed", current.url, e);
-      } finally {
-        active--;
-        if (idx < imageData.length) {
-          queue.push(runNext());
-        }
-      }
-    };
-
-    // start workers
-    const starters = Math.min(limit, imageData.length);
-    for (let i = 0; i < starters; i++) {
-      queue.push(runNext());
-    }
-    await Promise.all(queue);
+    downloaded.forEach(({ buffer, filename }) => {
+      archive.append(buffer, { name: filename });
+    });
 
     archive.finalize();
     await archiveFinished;
