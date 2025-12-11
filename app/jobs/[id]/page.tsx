@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
+import JSZip from "jszip";
 
 interface Job {
   id: string;
@@ -28,6 +29,7 @@ export default function JobDetailPage() {
   const [showConfig, setShowConfig] = useState(false);
   const [showUploads, setShowUploads] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [downloadingClient, setDownloadingClient] = useState(false);
 
   const fetchJobDetails = async () => {
     try {
@@ -156,6 +158,54 @@ export default function JobDetailPage() {
 
   const resultList: any[] = Array.isArray(job.results?.results) ? job.results.results : [];
   const generatedImages = resultList.map((r: any) => r.gcs_url).filter(Boolean);
+  const expectedImages =
+    (Array.isArray(job.images) ? job.images.length : 0) *
+    (job.config?.num_variations || job.config?.config?.num_variations || job.config?.config?.config?.num_variations || 1) *
+    ((job.config as any)?.aspect_ratios?.length || (job.config as any)?.aspect_ratio ? ((job.config as any)?.aspect_ratios?.length || 1) : 1);
+
+  const handleClientDownload = async () => {
+    if (!job) return;
+    try {
+      setDownloadingClient(true);
+      const res = await fetch(`/api/download/${job.groupId}?mode=list`);
+      if (!res.ok) throw new Error("Failed to fetch file list");
+      const data = await res.json();
+      const files: Array<{ url: string; filename: string }> = data.files || [];
+      const zip = new JSZip();
+
+      let idx = 0;
+      const limit = 8;
+      const worker = async () => {
+        while (idx < files.length) {
+          const current = files[idx++];
+          try {
+            const r = await fetch(current.url);
+            if (!r.ok) continue;
+            const blob = await r.blob();
+            zip.file(current.filename, blob);
+          } catch (e) {
+            console.error("client download failed", current.url, e);
+          }
+        }
+      };
+
+      await Promise.all(
+        Array.from({ length: Math.min(limit, files.length) }, () => worker())
+      );
+
+      const content = await zip.generateAsync({ type: "blob" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(content);
+      a.download = `${job.groupId}_images.zip`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    } catch (e) {
+      console.error("Client ZIP failed", e);
+      alert("Client ZIP failed. Please try server download.");
+    } finally {
+      setDownloadingClient(false);
+    }
+  };
   const groupedResults: Record<string, any[]> = resultList.reduce((acc: Record<string, any[]>, item: any) => {
     const key = item.ratio || "default";
     if (!acc[key]) acc[key] = [];
@@ -303,14 +353,24 @@ export default function JobDetailPage() {
               <h2 className="text-2xl font-bold">
                 Generated Images ({generatedImages.length})
               </h2>
-              <button
-                onClick={() => window.location.href = `/api/jobs/${job.id}/download`}
-                disabled={job.status !== "completed"}
-                className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed shadow"
-                title={job.status === "completed" ? "Download results as ZIP" : "Job not completed yet"}
-              >
-                Download Results
-              </button>
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  onClick={() => window.location.href = `/api/jobs/${job.id}/download`}
+                  disabled={job.status !== "completed"}
+                  className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed shadow"
+                  title={job.status === "completed" ? "Download results as ZIP" : "Job not completed yet"}
+                >
+                  Server ZIP
+                </button>
+                <button
+                  onClick={handleClientDownload}
+                  disabled={downloadingClient}
+                  className="px-4 py-2 rounded-lg bg-green-600 text-white text-sm font-semibold hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed shadow"
+                  title="Download ZIP in browser to avoid server timeout"
+                >
+                  {downloadingClient ? "Preparing..." : "Client ZIP (beta)"}
+                </button>
+              </div>
             </div>
             <div className="space-y-6">
               {ratioKeys.map((ratioKey) => (
@@ -362,6 +422,30 @@ export default function JobDetailPage() {
           <div className="bg-yellow-50 dark:bg-yellow-900/20 p-6 rounded-lg">
             <p className="text-yellow-800 dark:text-yellow-300 mb-3">
               Job completed but no generated images found.
+            </p>
+            <button
+              onClick={async () => {
+                setRefreshing(true);
+                try {
+                  await fetch(`/api/jobs/${job.id}/check-batch`, { method: "POST" });
+                  await fetchJobDetails();
+                } catch (err) {
+                  console.error("Failed to refresh from worker", err);
+                }
+                setRefreshing(false);
+              }}
+              className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm font-medium disabled:opacity-60"
+              disabled={refreshing}
+            >
+              {refreshing ? "Refreshing..." : "Fetch results again"}
+            </button>
+          </div>
+        )}
+
+        {generatedImages.length > 0 && generatedImages.length < expectedImages && (
+          <div className="bg-yellow-50 dark:bg-yellow-900/20 p-6 rounded-lg mt-4">
+            <p className="text-yellow-800 dark:text-yellow-300 mb-3">
+              Generated {generatedImages.length}/{expectedImages} images. You can fetch again to check for more results.
             </p>
             <button
               onClick={async () => {

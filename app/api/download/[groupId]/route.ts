@@ -19,6 +19,8 @@ export async function GET(
       );
     }
 
+    const mode = request.nextUrl.searchParams.get("mode") || "zip";
+
     // Get all completed jobs in this group
     const groupJobs = await prisma.job.findMany({
       where: {
@@ -56,53 +58,62 @@ export async function GET(
       );
     }
 
-    // Create ZIP file in memory
+    // If mode=list, return JSON list of files for client-side download
+    if (mode === "list") {
+      return NextResponse.json({
+        files: imageData,
+        count: imageData.length,
+      });
+    }
+
+    // Create ZIP file in memory with concurrent downloads to reduce timeout
     const archive = archiver("zip", {
-      zlib: { level: 9 }, // Maximum compression
+      zlib: { level: 6 }, // slightly lower for speed
     });
 
     const chunks: Buffer[] = [];
+    archive.on("data", (chunk) => chunks.push(chunk));
 
-    // Collect all chunks
-    archive.on("data", (chunk) => {
-      chunks.push(chunk);
-    });
-
-    // Wait for archive to finish
     const archiveFinished = new Promise<void>((resolve, reject) => {
-      archive.on("end", () => {
-        resolve();
-      });
-      archive.on("error", (err) => {
-        reject(err);
-      });
+      archive.on("end", resolve);
+      archive.on("error", reject);
     });
 
-    // Download and add each image to the ZIP
-    for (const image of imageData) {
+    // simple p-limit
+    const limit = 8;
+    let active = 0;
+    let idx = 0;
+    const queue: Promise<void>[] = [];
+
+    const runNext = async () => {
+      if (idx >= imageData.length) return;
+      const current = imageData[idx++];
+      active++;
       try {
-        const response = await fetch(image.url);
-        if (response.ok) {
-          const buffer = await response.arrayBuffer();
-          archive.append(Buffer.from(buffer), { name: image.filename });
-        } else {
-          console.warn(`Failed to download image: ${image.url}`);
+        const buffer = await downloadWithTimeout(current.url, 20000);
+        if (buffer) archive.append(buffer, { name: current.filename });
+      } catch (e) {
+        console.warn("Download failed", current.url, e);
+      } finally {
+        active--;
+        if (idx < imageData.length) {
+          queue.push(runNext());
         }
-      } catch (error) {
-        console.error(`Error downloading image ${image.url}:`, error);
       }
+    };
+
+    // start workers
+    const starters = Math.min(limit, imageData.length);
+    for (let i = 0; i < starters; i++) {
+      queue.push(runNext());
     }
+    await Promise.all(queue);
 
-    // Finalize the archive
     archive.finalize();
-
-    // Wait for archive to complete
     await archiveFinished;
 
-    // Combine all chunks into a single buffer
     const zipBuffer = Buffer.concat(chunks);
 
-    // Return ZIP file with proper headers
     return new NextResponse(zipBuffer, {
       headers: {
         "Content-Type": "application/zip",
@@ -116,5 +127,18 @@ export async function GET(
       { error: error.message },
       { status: 500 }
     );
+  }
+}
+
+async function downloadWithTimeout(url: string, timeoutMs: number): Promise<Buffer | null> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { signal: controller.signal });
+    if (!res.ok) return null;
+    const arr = await res.arrayBuffer();
+    return Buffer.from(arr);
+  } finally {
+    clearTimeout(timeout);
   }
 }

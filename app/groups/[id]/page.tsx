@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
+import JSZip from "jszip";
 
 interface Job {
   id: string;
@@ -19,6 +20,7 @@ export default function GroupDetailPage() {
   const [groupName, setGroupName] = useState("");
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(true);
+  const [downloading, setDownloading] = useState(false);
 
   useEffect(() => {
     loadGroupDetails();
@@ -45,6 +47,49 @@ export default function GroupDetailPage() {
 
   const handleDownload = () => {
     window.location.href = `/api/download/${groupId}`;
+  };
+
+  const handleClientDownload = async () => {
+    try {
+      setDownloading(true);
+      const res = await fetch(`/api/download/${groupId}?mode=list`);
+      if (!res.ok) throw new Error("Failed to fetch file list");
+      const data = await res.json();
+      const files: Array<{ url: string; filename: string }> = data.files || [];
+      const zip = new JSZip();
+
+      let idx = 0;
+      const limit = 8;
+      const worker = async () => {
+        while (idx < files.length) {
+          const current = files[idx++];
+          try {
+            const r = await fetch(current.url);
+            if (!r.ok) continue;
+            const blob = await r.blob();
+            zip.file(current.filename, blob);
+          } catch (e) {
+            console.error("client download failed", current.url, e);
+          }
+        }
+      };
+
+      await Promise.all(
+        Array.from({ length: Math.min(limit, files.length) }, () => worker())
+      );
+
+      const content = await zip.generateAsync({ type: "blob" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(content);
+      a.download = `${groupId}_images.zip`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    } catch (e) {
+      console.error("Client group download failed", e);
+      alert("Client ZIP failed. Please try server download.");
+    } finally {
+      setDownloading(false);
+    }
   };
 
   const getStatusColor = (status: string) => {
@@ -88,12 +133,22 @@ export default function GroupDetailPage() {
                 {jobs.length} job(s) in this group
               </p>
             </div>
-            <button
-              onClick={handleDownload}
-              className="px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700"
-            >
-              Download All Images
-            </button>
+            <div className="flex gap-2 flex-wrap">
+              <button
+                onClick={handleDownload}
+                className="px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700"
+              >
+                Server ZIP
+              </button>
+              <button
+                onClick={handleClientDownload}
+                disabled={downloading}
+                className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-60"
+                title="Download ZIP in browser to avoid server timeout"
+              >
+                {downloading ? "Preparing..." : "Client ZIP (beta)"}
+              </button>
+            </div>
           </div>
         </div>
 
