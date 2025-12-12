@@ -818,10 +818,10 @@ async def handle_fetch_results_mode(input_data: Dict[str, Any]) -> Dict[str, Any
 
         file_uri = normalize_file_uri(file_name)
         files_to_delete.append(file_uri)
-        download_url = f"https://generativelanguage.googleapis.com/v1beta/{file_uri}:download?alt=media&key={api_key}"
+        download_url = f"https://generativelanguage.googleapis.com/download/v1beta/{file_uri}:download?alt=media&key={api_key}"
 
         async with httpx.AsyncClient(timeout=60) as client_http:
-            resp = await client_http.get(download_url)
+            resp = await client_http.get(download_url, follow_redirects=True)
             if resp.status_code != 200:
                 print(f"[fetch_results] download failed {download_url} status={resp.status_code}")
                 continue
