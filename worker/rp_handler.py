@@ -855,22 +855,10 @@ async def handle_fetch_results_mode(input_data: Dict[str, Any]) -> Dict[str, Any
             })
         results = uploaded
 
-    # delete downloaded batch files from Gemini to save quota
-    try:
-        client = genai.Client(api_key=api_key)
-        for uri in files_to_delete:
-            norm = uri if str(uri).startswith("files/") else f"files/{str(uri).split('/')[-1]}"
-            client.files.delete(name=norm)
-            print(f"[fetch_results] deleted file {norm}")
-        # delete batch jobs as well
-        for bname in batch_names_to_delete:
-            try:
-                client.batches.delete(name=bname)
-                print(f"[fetch_results] deleted batch {bname}")
-            except Exception as e:
-                print(f"[fetch_results] failed delete batch {bname}: {e}")
-    except Exception:
-        pass
+    if files_to_delete:
+        print(f"[fetch_results] files retained for cleanup_group: {len(files_to_delete)}")
+    if batch_names_to_delete:
+        print(f"[fetch_results] batches retained for cleanup_group: {len(batch_names_to_delete)}")
 
     return {
         "status": "completed",
