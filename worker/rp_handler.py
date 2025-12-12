@@ -913,7 +913,8 @@ async def handle_cleanup_group(input_data: Dict[str, Any]) -> Dict[str, Any]:
     api_key = input_data.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY")
 
     if not group_id or not job_ids:
-        return {"status": "failed", "error": "Missing group_id or job_ids"}
+        print("[cleanup] missing group_id or job_ids, skipping")
+        return {"status": "skipped", "reason": "missing group_id or job_ids"}
 
     deleted_gcs = 0
     deleted_files = 0
