@@ -14,6 +14,11 @@ export async function POST(request: NextRequest) {
     // RunPod webhook format: https://docs.runpod.io/serverless/workers/webhooks
     const { id: runpodJobId, status, output, error, input } = body;
     
+    // Handle cleanup webhook (no job_id)
+    if (input?.mode === "cleanup_group") {
+      return NextResponse.json({ success: true, mode: "cleanup_group" });
+    }
+
     // Extract our job_id from input payload
     const jobId = input?.job_id;
     
@@ -79,7 +84,7 @@ export async function POST(request: NextRequest) {
       updateData.completedAt = new Date();
       
       // Log full output for debugging
-      console.log("Output:", JSON.stringify(output, null, 2));
+      // console.log("Output:", JSON.stringify(output, null, 2));
       
       // Extract generated image URLs from output.results and store separately
       if (output.results && Array.isArray(output.results)) {

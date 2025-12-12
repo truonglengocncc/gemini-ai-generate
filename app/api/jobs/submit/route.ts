@@ -198,8 +198,7 @@ async function submitToRunPod(jobId: string, payload: any) {
   
   console.log("=".repeat(80));
   console.log(`[${new Date().toISOString()}] Sending payload to RunPod worker for job: ${jobId}`);
-  console.log("Full payload:", JSON.stringify(requestBody, null, 2));
-  console.log("Payload size:", JSON.stringify(requestBody).length, "bytes");
+  console.log("Payload prepared (details omitted for privacy).");
   console.log("=".repeat(80));
 
   try {

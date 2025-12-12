@@ -110,6 +110,22 @@ export default function GroupsPage() {
     }
   };
 
+  const handleDelete = async (groupId: string) => {
+    if (!confirm("Delete this group and all its jobs/files?")) return;
+    try {
+      const res = await fetch(`/api/groups/${groupId}/delete`, { method: "DELETE" });
+      if (!res.ok) {
+        const data = await res.json();
+        alert(data.error || "Delete failed");
+        return;
+      }
+      await loadGroups();
+    } catch (e) {
+      console.error("Delete group failed", e);
+      alert("Delete failed");
+    }
+  };
+
   return (
     <div className="min-h-screen bg-zinc-50 dark:bg-black">
       <div className="max-w-7xl mx-auto px-4 py-8">
@@ -189,19 +205,26 @@ export default function GroupsPage() {
                   >
                     Server ZIP
                   </button>
-                  <button
-                    onClick={() => handleClientDownload(group.id, group.name)}
-                    disabled={downloading === group.id}
-                    className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm disabled:opacity-60"
-                    title="Download ZIP in browser"
-                  >
-                    {downloading === group.id ? "Preparing..." : "Client ZIP"}
-                  </button>
-                </div>
+                <button
+                  onClick={() => handleClientDownload(group.id, group.name)}
+                  disabled={downloading === group.id}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm disabled:opacity-60"
+                  title="Download ZIP in browser"
+                >
+                  {downloading === group.id ? "Preparing..." : "Client ZIP"}
+                </button>
+                <button
+                  onClick={() => handleDelete(group.id)}
+                  className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 text-sm"
+                  title="Delete group and all jobs/files"
+                >
+                  Delete
+                </button>
               </div>
-            ))}
-          </div>
-        )}
+            </div>
+          ))}
+        </div>
+      )}
       </div>
     </div>
   );
