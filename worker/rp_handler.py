@@ -7,7 +7,7 @@ import base64
 import os
 import json
 import asyncio
-import aiohttp
+import httpx
 import time
 import io
 from typing import Dict, Any, List
@@ -35,6 +35,8 @@ async def handler(job):
         return await handle_automatic_batch_mode(input_data)
     elif mode == 'fetch_results':
         return await handle_fetch_results_mode(input_data)
+    elif mode == 'cleanup_group':
+        return await handle_cleanup_group(input_data)
     else:
         return {
             "error": f"Invalid mode: {mode}"
@@ -660,11 +662,11 @@ def _list_files_from_gcs_folder_sync(gcs_client, bucket_name, folder_path, gcs_c
     return file_urls
 
 async def download_image(image_url: str) -> bytes:
-    async with aiohttp.ClientSession() as session:
-        async with session.get(image_url) as response:
-            if response.status != 200:
-                raise ValueError(f"Failed download: {image_url} ({response.status})")
-            return await response.read()
+    async with httpx.AsyncClient(timeout=20) as client:
+        r = await client.get(image_url)
+        if r.status_code != 200:
+            raise ValueError(f"Failed download: {image_url} ({r.status_code})")
+        return r.content
 
 def initialize_gcs_client(gcs_config: Dict[str, Any]) -> storage.Client:
     credentials_data = gcs_config.get("credentials")
@@ -797,6 +799,9 @@ async def handle_fetch_results_mode(input_data: Dict[str, Any]) -> Dict[str, Any
 
     results = []
     total_bytes = 0
+    files_to_delete = []
+    batch_names_to_delete = list(batch_names)
+    print(f"[fetch_results] start group/job {input_data.get('group_id')}/{job_id} batches={batch_names}")
 
     for name in batch_names:
         # resolve file name via batch get
@@ -812,23 +817,25 @@ async def handle_fetch_results_mode(input_data: Dict[str, Any]) -> Dict[str, Any
             continue
 
         file_uri = normalize_file_uri(file_name)
+        files_to_delete.append(file_uri)
         download_url = f"https://generativelanguage.googleapis.com/v1beta/{file_uri}:download?alt=media&key={api_key}"
 
-        async with aiohttp.ClientSession() as session:
-            async with session.get(download_url) as resp:
-                if resp.status != 200:
+        async with httpx.AsyncClient(timeout=60) as client_http:
+            resp = await client_http.get(download_url)
+            if resp.status_code != 200:
+                print(f"[fetch_results] download failed {download_url} status={resp.status_code}")
+                continue
+            text = resp.text
+            total_bytes += len(text.encode("utf-8"))
+            for line in text.split("\n"):
+                if not line.strip():
                     continue
-                text = await resp.text()
-                total_bytes += len(text.encode("utf-8"))
-                for line in text.split("\n"):
-                    if not line.strip():
-                        continue
-                    try:
-                        parsed = json.loads(line)
-                        images = extract_images_from_batch_line(parsed)
-                        results.extend(images)
-                    except Exception:
-                        continue
+                try:
+                    parsed = json.loads(line)
+                    images = extract_images_from_batch_line(parsed)
+                    results.extend(images)
+                except Exception:
+                    continue
 
     # Upload to GCS if configured
     if gcs_config and results:
@@ -847,6 +854,23 @@ async def handle_fetch_results_mode(input_data: Dict[str, Any]) -> Dict[str, Any
                 "ratio": img.get("ratio"),
             })
         results = uploaded
+
+    # delete downloaded batch files from Gemini to save quota
+    try:
+        client = genai.Client(api_key=api_key)
+        for uri in files_to_delete:
+            norm = uri if str(uri).startswith("files/") else f"files/{str(uri).split('/')[-1]}"
+            client.files.delete(name=norm)
+            print(f"[fetch_results] deleted file {norm}")
+        # delete batch jobs as well
+        for bname in batch_names_to_delete:
+            try:
+                client.batches.delete(name=bname)
+                print(f"[fetch_results] deleted batch {bname}")
+            except Exception as e:
+                print(f"[fetch_results] failed delete batch {bname}: {e}")
+    except Exception:
+        pass
 
     return {
         "status": "completed",
@@ -883,6 +907,114 @@ def extract_images_from_batch_line(parsed: Any) -> List[Dict[str, Any]]:
 
 def adjust_concurrency(current_concurrency: int) -> int:
     return 20 if current_concurrency < 20 else current_concurrency
+
+# ---------------------------------------------------------------------------- #
+#                              Cleanup Group (GCS + Gemini)                    #
+# ---------------------------------------------------------------------------- #
+
+async def handle_cleanup_group(input_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Cleanup group artifacts:
+    - Delete files in GCS under prefix/jobId
+    - Delete Gemini Files whose displayName/name contains any jobId
+    - (DB deletion is handled in Next.js before enqueuing)
+    """
+    group_id = input_data.get("group_id")
+    job_ids = input_data.get("job_ids") or []
+    gcs_config = input_data.get("gcs_config")
+    api_key = input_data.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY")
+
+    if not group_id or not job_ids:
+        return {"status": "failed", "error": "Missing group_id or job_ids"}
+
+    deleted_gcs = 0
+    deleted_files = 0
+    matched_files = 0
+    matched_batches = 0
+    deleted_batches = 0
+    batch_names = input_data.get("batch_names") or input_data.get("batch_job_names") or []
+
+    # GCS cleanup
+    if gcs_config:
+        gcs_client = initialize_gcs_client(gcs_config)
+        bucket = gcs_client.bucket(gcs_config.get("bucket_name"))
+        prefix_base = gcs_config.get("path_prefix") or gcs_config.get("path_prefixes") or gcs_config.get("root_prefix") or ""
+        for job_id in job_ids:
+            prefix = f"{prefix_base.rstrip('/')}/{job_id}"
+            blobs = bucket.list_blobs(prefix=prefix)
+            for blob in blobs:
+                try:
+                    blob.delete()
+                    deleted_gcs += 1
+                except Exception:
+                    continue
+
+    # Gemini file cleanup + batch cleanup
+    if api_key:
+        try:
+            client = genai.Client(api_key=api_key)
+            pager = client.files.list()
+            files = []
+            try:
+                for f in pager:
+                    files.append(f)
+            except TypeError:
+                files = (pager.files if hasattr(pager, "files") else getattr(pager, "result", None)) or []
+            for f in files:
+                name = getattr(f, "name", None) or getattr(f, "uri", None) or getattr(f, "file", None)
+                disp = getattr(f, "display_name", None) or getattr(f, "displayName", None) or ""
+                if not name:
+                    continue
+                if any(j in (disp or name) for j in job_ids):
+                    matched_files += 1
+                    norm = name if str(name).startswith("files/") else f"files/{str(name).split('/')[-1]}"
+                    try:
+                        client.files.delete(name=norm)
+                        deleted_files += 1
+                        print(f"[cleanup] deleted Gemini file {norm}")
+                    except Exception as e:
+                        print(f"[cleanup] failed delete {norm}: {e}")
+                        continue
+            # delete batches
+            if batch_names:
+                for b in batch_names:
+                    try:
+                        client.batches.delete(name=b)
+                        deleted_batches += 1
+                        matched_batches += 1
+                        print(f"[cleanup] deleted batch {b}")
+                    except Exception as e:
+                        print(f"[cleanup] failed delete batch {b}: {e}")
+            else:
+                try:
+                    bpager = client.batches.list()
+                    batches = []
+                    for b in bpager:
+                        batches.append(b)
+                    for b in batches:
+                        bname = getattr(b, "name", "") or ""
+                        display = getattr(b, "display_name", None) or getattr(b, "displayName", None) or ""
+                        if any(j in (display or bname) for j in job_ids):
+                            matched_batches += 1
+                            try:
+                                client.batches.delete(name=bname)
+                                deleted_batches += 1
+                                print(f"[cleanup] deleted batch {bname}")
+                            except Exception as e:
+                                print(f"[cleanup] failed delete batch {bname}: {e}")
+                except Exception as e:
+                    print(f"[cleanup] list batches failed: {e}")
+        except Exception as e:
+            return {"status": "failed", "error": f"Gemini cleanup failed: {e}"}
+
+    return {
+        "status": "completed",
+        "deleted_gcs": deleted_gcs,
+        "deleted_gemini_files": deleted_files,
+        "matched_gemini_files": matched_files,
+        "matched_batches": matched_batches,
+        "deleted_batches": deleted_batches,
+    }
 
 if __name__ == "__main__":
     runpod.serverless.start({
