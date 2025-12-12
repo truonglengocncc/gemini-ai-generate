@@ -55,6 +55,7 @@ export default function GroupsPage() {
 
       setNewGroupName("");
       await loadGroups();
+      alert("Group deleted successfully");
     } catch (error) {
       console.error("Failed to create group:", error);
       alert("Failed to create group");

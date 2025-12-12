@@ -21,21 +21,22 @@ export async function DELETE(
     await prisma.job.deleteMany({ where: { groupId } });
     await prisma.group.delete({ where: { id: groupId } });
 
-    // Collect batch_job_names from configs (if any) before deletion
-    const batchNames: string[] = [];
-    for (const j of group.jobs) {
-      const cfg: any = j.config || {};
-      const names =
-        cfg.batch_job_names ||
-        cfg.batchJobNames ||
-        (cfg.batchJobName ? [cfg.batchJobName] : []);
-      if (Array.isArray(names)) {
-        batchNames.push(...names);
+    if (group.jobs.length > 0) {
+      // Collect batch_job_names from configs (if any) before deletion
+      const batchNames: string[] = [];
+      for (const j of group.jobs) {
+        const cfg: any = j.config || {};
+        const names =
+          cfg.batch_job_names ||
+          cfg.batchJobNames ||
+          (cfg.batchJobName ? [cfg.batchJobName] : []);
+        if (Array.isArray(names)) {
+          batchNames.push(...names);
+        }
       }
+      // Enqueue cleanup worker (GCS + Gemini files + batches)
+      await submitCleanupToWorker(groupId, group.jobs.map((j) => j.id), batchNames);
     }
-
-    // Enqueue cleanup worker (GCS + Gemini files + batches)
-    await submitCleanupToWorker(groupId, group.jobs.map((j) => j.id), batchNames);
 
     return NextResponse.json({ success: true });
   } catch (error: any) {
