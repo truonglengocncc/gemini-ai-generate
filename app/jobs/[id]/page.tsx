@@ -466,7 +466,7 @@ export default function JobDetailPage() {
           </div>
         )}
 
-        {job.status === "processing" && (
+        {job.status === "processing" && generatedImages.length < expectedImages && (
           <div className="bg-blue-50 dark:bg-blue-900/20 p-6 rounded-lg">
             <p className="text-blue-800 dark:text-blue-300">
               Job is currently processing. Refresh the page to see updates.
