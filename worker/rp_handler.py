@@ -665,11 +665,8 @@ def _list_files_from_gcs_folder_sync(gcs_client, bucket_name, folder_path, gcs_c
     return file_urls
 
 async def download_image(image_url: str) -> bytes:
-    async with httpx.AsyncClient(timeout=20) as client:
-        r = await client.get(image_url)
-        if r.status_code != 200:
-            raise ValueError(f"Failed download: {image_url} ({r.status_code})")
-        return r.content
+    r = await http_get_with_retry(image_url, timeout=30, attempts=3, follow_redirects=True)
+    return r.content
 
 def initialize_gcs_client(gcs_config: Dict[str, Any]) -> storage.Client:
     credentials_data = gcs_config.get("credentials")
@@ -715,6 +712,7 @@ def expand_prompt_template(template: str) -> List[str]:
     segments.append(template[last:])
     if not variables:
         return [template]
+    start_time = time.time()
     results = []
     def build(idx: int, current: str):
         if idx == len(variables):
@@ -782,6 +780,65 @@ def normalize_file_uri(uri: str) -> str:
     return uri
 
 # ---------------------------------------------------------------------------- #
+#                           HTTP helper with retries                           #
+# ---------------------------------------------------------------------------- #
+
+async def http_get_with_retry(
+    url: str,
+    *,
+    timeout: float = 30.0,
+    attempts: int = 3,
+    delay: float = 1.5,
+    follow_redirects: bool = False,
+) -> httpx.Response:
+    last_error = None
+    last_status = None
+    for attempt in range(1, attempts + 1):
+        try:
+            async with httpx.AsyncClient(timeout=timeout, follow_redirects=follow_redirects) as client:
+                resp = await client.get(url)
+                last_status = resp.status_code
+                if resp.status_code == 200:
+                    return resp
+        except httpx.HTTPError as e:
+            last_error = e
+        if attempt < attempts:
+            await asyncio.sleep(delay * attempt)
+    if last_error:
+        raise last_error
+    raise ValueError(f"GET {url} failed, last status {last_status}")
+
+
+async def stream_jsonl_with_retry(
+    url: str,
+    *,
+    timeout: float = 60.0,
+    attempts: int = 2,
+    delay: float = 1.5,
+    follow_redirects: bool = True,
+):
+    """
+    Stream lines from a JSONL URL with retry. Yields text lines.
+    """
+    last_error = None
+    for attempt in range(1, attempts + 1):
+        try:
+            async with httpx.AsyncClient(timeout=timeout, follow_redirects=follow_redirects) as client:
+                async with client.stream("GET", url) as resp:
+                    if resp.status_code != 200:
+                        last_error = ValueError(f"status {resp.status_code}")
+                        raise last_error
+                    async for line in resp.aiter_lines():
+                        yield line
+                    return
+        except Exception as e:
+            last_error = e
+        if attempt < attempts:
+            await asyncio.sleep(delay * attempt)
+    if last_error:
+        raise last_error
+
+# ---------------------------------------------------------------------------- #
 #                         Fetch batch results in worker                        #
 # ---------------------------------------------------------------------------- #
 
@@ -825,22 +882,27 @@ async def handle_fetch_results_mode(input_data: Dict[str, Any]) -> Dict[str, Any
         response_files.append(file_uri)
         download_url = f"https://generativelanguage.googleapis.com/download/v1beta/{file_uri}:download?alt=media&key={api_key}"
 
-        async with httpx.AsyncClient(timeout=60) as client_http:
-            resp = await client_http.get(download_url, follow_redirects=True)
-            if resp.status_code != 200:
-                print(f"[fetch_results] download failed {download_url} status={resp.status_code}")
-                continue
-            text = resp.text
-            total_bytes += len(text.encode("utf-8"))
-            for line in text.split("\n"):
-                if not line.strip():
+        batch_start = time.time()
+        bytes_this_batch = 0
+        images_this_batch = 0
+        try:
+            async for line in stream_jsonl_with_retry(download_url, timeout=90, attempts=2, follow_redirects=True):
+                if not line or not line.strip():
                     continue
+                bytes_this_batch += len(line.encode("utf-8")) + 1
+                total_bytes += len(line.encode("utf-8")) + 1
                 try:
                     parsed = json.loads(line)
                     images = extract_images_from_batch_line(parsed)
+                    images_this_batch += len(images)
                     results.extend(images)
                 except Exception:
                     continue
+            duration = time.time() - batch_start
+            print(f"[fetch_results] batch {name} done images={images_this_batch} bytes={bytes_this_batch} duration={duration:.1f}s")
+        except Exception as e:
+            print(f"[fetch_results] download failed {download_url} error={e}")
+            continue
 
     # Upload to GCS if configured
     if gcs_config and results:
@@ -872,6 +934,7 @@ async def handle_fetch_results_mode(input_data: Dict[str, Any]) -> Dict[str, Any
         "total_bytes": total_bytes,
         "response_files": response_files,
         "batch_job_names": batch_names_to_delete,
+        "duration_sec": round(time.time() - start_time, 1),
     }
 
 def extract_images_from_batch_line(parsed: Any) -> List[Dict[str, Any]]:
