@@ -22,8 +22,11 @@ export async function DELETE(
     await prisma.group.delete({ where: { id: groupId } });
 
     if (group.jobs.length > 0) {
-      // Collect batch_job_names from configs (if any) before deletion
+      // Collect batch_job_names and batch_src_files from configs (if any) before deletion
       const batchNames: string[] = [];
+      const batchSrcFiles: string[] = [];
+      const responseFiles: string[] = [];
+      const batchNamesUnique = new Set<string>();
       for (const j of group.jobs) {
         const cfg: any = j.config || {};
         const names =
@@ -31,11 +34,20 @@ export async function DELETE(
           cfg.batchJobNames ||
           (cfg.batchJobName ? [cfg.batchJobName] : []);
         if (Array.isArray(names)) {
-          batchNames.push(...names);
+          names.forEach((n: string) => batchNamesUnique.add(n));
+        }
+        const srcs = cfg.batch_src_files;
+        if (Array.isArray(srcs)) {
+          batchSrcFiles.push(...srcs);
+        }
+        const resp = cfg.response_files;
+        if (Array.isArray(resp)) {
+          responseFiles.push(...resp);
         }
       }
+      batchNames.push(...batchNamesUnique);
       // Enqueue cleanup worker (GCS + Gemini files + batches)
-      await submitCleanupToWorker(groupId, group.jobs.map((j) => j.id), batchNames);
+      await submitCleanupToWorker(groupId, group.jobs.map((j) => j.id), batchNames, batchSrcFiles, responseFiles);
     }
 
     return NextResponse.json({ success: true });
@@ -45,7 +57,7 @@ export async function DELETE(
   }
 }
 
-async function submitCleanupToWorker(groupId: string, jobIds: string[], batchNames: string[]) {
+async function submitCleanupToWorker(groupId: string, jobIds: string[], batchNames: string[], batchSrcFiles: string[], responseFiles: string[]) {
   const runpodEndpoint = process.env.RUNPOD_ENDPOINT;
   if (!runpodEndpoint) return;
 
@@ -55,6 +67,8 @@ async function submitCleanupToWorker(groupId: string, jobIds: string[], batchNam
     job_ids: jobIds,
     job_id: groupId, // for webhook compatibility
     batch_names: batchNames,
+    batch_src_files: batchSrcFiles,
+    response_files: responseFiles,
   };
 
   const gcsConfig = getGcsConfig();

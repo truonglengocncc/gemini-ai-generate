@@ -57,10 +57,12 @@ export async function POST(request: NextRequest) {
     if (output?.status === "batch_submitted" && (output?.batch_job_name || output?.batch_job_names)) {
       const batchNames = output.batch_job_names || [output.batch_job_name];
       const requestKeys = output.request_keys || [];
+      const batchSrcFiles = output.batch_src_files || [];
       updateData.status = "batch_submitted";
       updateData.config = {
         ...((job.config as any) || {}),
         batch_job_names: batchNames,
+        batch_src_files: batchSrcFiles,
         request_keys: requestKeys,
       };
       console.log(`Job ${jobId} batch submitted: ${batchNames.join(",")}`);
@@ -82,6 +84,15 @@ export async function POST(request: NextRequest) {
       // Store full output in results field
       updateData.results = output;
       updateData.completedAt = new Date();
+      // Persist response file names and batch names for later cleanup
+      if ((Array.isArray(output.response_files) && output.response_files.length > 0) ||
+          (Array.isArray(output.batch_job_names) && output.batch_job_names.length > 0)) {
+        updateData.config = {
+          ...((job.config as any) || {}),
+          response_files: Array.isArray(output.response_files) ? output.response_files : (job.config as any)?.response_files,
+          batch_job_names: Array.isArray(output.batch_job_names) ? output.batch_job_names : (job.config as any)?.batch_job_names,
+        };
+      }
       
       // Log full output for debugging
       // console.log("Output:", JSON.stringify(output, null, 2));

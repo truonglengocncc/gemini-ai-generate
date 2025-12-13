@@ -93,6 +93,7 @@ async def handle_automatic_batch_mode(input_data: Dict[str, Any]) -> Dict[str, A
     MAX_REQUESTS = 200
 
     batch_names: List[str] = []
+    src_files: List[str] = []
     request_keys: List[str] = []
     current_lines: List[str] = []
     current_size = 0
@@ -123,6 +124,7 @@ async def handle_automatic_batch_mode(input_data: Dict[str, Any]) -> Dict[str, A
             src=file_uri,
             config={"display_name": f"batch-job-{job_id}-{chunk_idx}"},
         )
+        src_files.append(file_uri)
         batch_name = getattr(batch, "name", None) or getattr(batch, "batch", {}).get("name")
         if batch_name:
             batch_names.append(batch_name)
@@ -179,6 +181,7 @@ async def handle_automatic_batch_mode(input_data: Dict[str, Any]) -> Dict[str, A
     return {
         "status": "batch_submitted",
         "batch_job_names": batch_names,
+        "batch_src_files": src_files,
         "request_keys": request_keys,
     }
 
@@ -800,6 +803,7 @@ async def handle_fetch_results_mode(input_data: Dict[str, Any]) -> Dict[str, Any
     results = []
     total_bytes = 0
     files_to_delete = []
+    response_files = []
     batch_names_to_delete = list(batch_names)
     print(f"[fetch_results] start group/job {input_data.get('group_id')}/{job_id} batches={batch_names}")
 
@@ -818,6 +822,7 @@ async def handle_fetch_results_mode(input_data: Dict[str, Any]) -> Dict[str, Any
 
         file_uri = normalize_file_uri(file_name)
         files_to_delete.append(file_uri)
+        response_files.append(file_uri)
         download_url = f"https://generativelanguage.googleapis.com/download/v1beta/{file_uri}:download?alt=media&key={api_key}"
 
         async with httpx.AsyncClient(timeout=60) as client_http:
@@ -865,6 +870,8 @@ async def handle_fetch_results_mode(input_data: Dict[str, Any]) -> Dict[str, Any
         "results": results,
         "total_generated": len(results),
         "total_bytes": total_bytes,
+        "response_files": response_files,
+        "batch_job_names": batch_names_to_delete,
     }
 
 def extract_images_from_batch_line(parsed: Any) -> List[Dict[str, Any]]:
@@ -922,6 +929,8 @@ async def handle_cleanup_group(input_data: Dict[str, Any]) -> Dict[str, Any]:
     matched_batches = 0
     deleted_batches = 0
     batch_names = input_data.get("batch_names") or input_data.get("batch_job_names") or []
+    batch_src_files = input_data.get("batch_src_files") or []
+    response_files = input_data.get("response_files") or []
 
     # GCS cleanup
     if gcs_config:
@@ -942,6 +951,34 @@ async def handle_cleanup_group(input_data: Dict[str, Any]) -> Dict[str, Any]:
     if api_key:
         try:
             client = genai.Client(api_key=api_key)
+            files_to_delete = set()
+            for sf in batch_src_files:
+                files_to_delete.add(normalize_file_uri(sf))
+            for rf in response_files:
+                files_to_delete.add(normalize_file_uri(rf))
+
+            # Collect batch output/src files by explicit batch names
+            if batch_names:
+                for b in batch_names:
+                    try:
+                        batch = client.batches.get(name=b)
+                        b_display = getattr(batch, "display_name", None) or getattr(batch, "displayName", None) or ""
+                        b_name = getattr(batch, "name", "") or ""
+                        tied_to_job = any(j in (b_display or b_name) for j in job_ids)
+                        dest = getattr(batch, "dest", None) or getattr(batch, "output", None)
+                        if dest:
+                            fn = getattr(dest, "file_name", None) or getattr(dest, "fileName", None) or getattr(dest, "file", None)
+                            if fn and tied_to_job:
+                                files_to_delete.add(normalize_file_uri(fn))
+                        src_fn = getattr(batch, "src", None) or getattr(batch, "source", None) or getattr(batch, "input", None)
+                        if src_fn and tied_to_job:
+                            files_to_delete.add(normalize_file_uri(src_fn))
+                        if not tied_to_job:
+                            print(f"[cleanup] skip batch {b} (not linked to provided jobs)")
+                            continue
+                    except Exception as e:
+                        print(f"[cleanup] failed get batch {b}: {e}")
+
             pager = client.files.list()
             files = []
             try:
@@ -949,21 +986,26 @@ async def handle_cleanup_group(input_data: Dict[str, Any]) -> Dict[str, Any]:
                     files.append(f)
             except TypeError:
                 files = (pager.files if hasattr(pager, "files") else getattr(pager, "result", None)) or []
+
             for f in files:
                 name = getattr(f, "name", None) or getattr(f, "uri", None) or getattr(f, "file", None)
                 disp = getattr(f, "display_name", None) or getattr(f, "displayName", None) or ""
                 if not name:
                     continue
+                norm = name if str(name).startswith("files/") else f"files/{str(name).split('/')[-1]}"
+                should_delete = norm in files_to_delete or any(j in (disp or name) for j in job_ids)
+                if not should_delete:
+                    continue
                 if any(j in (disp or name) for j in job_ids):
                     matched_files += 1
-                    norm = name if str(name).startswith("files/") else f"files/{str(name).split('/')[-1]}"
-                    try:
-                        client.files.delete(name=norm)
-                        deleted_files += 1
-                        print(f"[cleanup] deleted Gemini file {norm}")
-                    except Exception as e:
-                        print(f"[cleanup] failed delete {norm}: {e}")
-                        continue
+                try:
+                    client.files.delete(name=norm)
+                    deleted_files += 1
+                    print(f"[cleanup] deleted Gemini file {norm}")
+                except Exception as e:
+                    print(f"[cleanup] failed delete {norm}: {e}")
+                    continue
+
             # delete batches
             if batch_names:
                 for b in batch_names:

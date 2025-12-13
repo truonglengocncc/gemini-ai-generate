@@ -489,6 +489,32 @@ export default function JobDetailPage() {
           </div>
         )}
 
+        {job.status === "failed" && job.config?.batch_job_names && (
+          <div className="bg-red-50 dark:bg-red-900/20 p-6 rounded-lg mt-4">
+            <p className="text-red-800 dark:text-red-300 mb-3">
+              Job failed: {job.error || "worker/network error"}
+            </p>
+            <button
+              onClick={async () => {
+                setCheckingBatch(true);
+                try {
+                  await fetch(`/api/jobs/${job.id}/check-batch`, { method: "POST" });
+                  await fetchJobDetails();
+                } catch (err) {
+                  console.error("Retry fetch results failed", err);
+                  alert("Retry failed. Please try again.");
+                } finally {
+                  setCheckingBatch(false);
+                }
+              }}
+              disabled={checkingBatch}
+              className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-60 text-sm font-medium"
+            >
+              {checkingBatch ? "Retrying..." : "Retry fetch results"}
+            </button>
+          </div>
+        )}
+
         {job.status === "batch_submitted" && job.mode === "automatic" && (
           <div className="bg-purple-50 dark:bg-purple-900/20 p-6 rounded-lg">
             <p className="text-purple-800 dark:text-purple-300 mb-2">
