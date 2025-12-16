@@ -497,6 +497,7 @@ export default function JobDetailPage() {
             <div className="flex flex-wrap gap-3">
               <button
                 onClick={async () => {
+                  if (!confirm("Fetch batch results again?")) return;
                   setCheckingBatch(true);
                   try {
                     await fetch(`/api/jobs/${job.id}/check-batch`, { method: "POST" });
@@ -515,6 +516,7 @@ export default function JobDetailPage() {
               </button>
               <button
                 onClick={async () => {
+                  if (!confirm("Retry this job from start? This may create new batches.")) return;
                   setCheckingBatch(true);
                   try {
                     const url =
@@ -540,6 +542,7 @@ export default function JobDetailPage() {
               {job.config?.batch_src_files?.length > 0 && (
                 <button
                   onClick={async () => {
+                    if (!confirm("Retry using saved JSONL files?")) return;
                     setCheckingBatch(true);
                     try {
                       const url =
@@ -556,7 +559,7 @@ export default function JobDetailPage() {
                       await fetchJobDetails();
                     } catch (err) {
                       console.error("Retry with preuploaded failed", err);
-                      alert("Retry with preuploaded files failed.");
+                      alert("Retry with saved files failed.");
                     } finally {
                       setCheckingBatch(false);
                     }
@@ -564,7 +567,7 @@ export default function JobDetailPage() {
                   disabled={checkingBatch}
                   className="px-4 py-2 bg-emerald-600 text-white rounded hover:bg-emerald-700 disabled:opacity-60 text-sm font-medium"
                 >
-                  {checkingBatch ? "Retrying..." : "Retry (use saved files)"}
+                  {checkingBatch ? "Retrying..." : "Retry saved files"}
                 </button>
               )}
             </div>
