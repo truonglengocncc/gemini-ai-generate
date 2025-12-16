@@ -22,10 +22,10 @@ export async function POST(request: NextRequest) {
       gcs_files, // optional GCS files uploaded via presign
       image_urls, // optional public image URLs (if already uploaded)
     } = body;
+    const isRetry = body.retry === true;
 
     // Validate input (skip heavy checks on retry)
-    const isRetry = body.retry === true;
-    if (!groupId) {
+    if (!groupId && !isRetry) {
       return NextResponse.json(
         { error: "Missing required field: groupId" },
         { status: 400 }
@@ -48,6 +48,29 @@ export async function POST(request: NextRequest) {
 
     // Use provided jobId or generate new one
     const jobId = providedJobId || `job_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+    // On retry: load existing job to restore required fields
+    let resolvedGroupId = groupId;
+    let resolvedFolder = folder;
+    let existingJob: any = null;
+    if (isRetry) {
+      existingJob = await prisma.job.findUnique({ where: { id: jobId } });
+      if (!existingJob) {
+        return NextResponse.json({ error: "Job not found for retry" }, { status: 404 });
+      }
+      resolvedGroupId = existingJob.groupId;
+      // try to recover folder from config
+      const cfg = (existingJob.config || {}) as any;
+      resolvedFolder =
+        folder ||
+        cfg.folder ||
+        cfg.upload_folder ||
+        cfg.folder_path ||
+        cfg.folderPath;
+      if (!resolvedFolder) {
+        return NextResponse.json({ error: "Missing folder for retry" }, { status: 400 });
+      }
+    }
 
     // List image URLs from folder for database storage
     let imageUrls: string[] = [];
@@ -77,16 +100,21 @@ export async function POST(request: NextRequest) {
       ...config,
       ...(model ? { model } : {}),
       ...(prompt_template ? { prompt_template } : {}),
+      ...(resolvedFolder ? { folder: resolvedFolder } : {}),
     };
 
     if (isRetry) {
-      // For retry, update existing job to queued and clear errors
+      // For retry, update existing job to processing and clear errors
       await prisma.job.update({
         where: { id: jobId },
         data: {
-          status: "queued",
+          status: "processing",
           error: null,
           updatedAt: new Date(),
+          config: {
+            ...(configWithModel || {}),
+            ...(existingJob?.config || {}),
+          },
         },
       });
     } else {
@@ -94,7 +122,7 @@ export async function POST(request: NextRequest) {
       await prisma.job.create({
         data: {
           id: jobId,
-          groupId,
+          groupId: resolvedGroupId,
           mode: "automatic",
           status: "queued", // worker will update to batch_submitted via webhook
           images: imageUrls,
@@ -107,9 +135,9 @@ export async function POST(request: NextRequest) {
     // Send payload to RunPod worker for batch submit
     await submitToRunPodBatch(jobId, {
       mode: "automatic_batch",
-      groupId,
+      groupId: resolvedGroupId,
       jobId,
-      folder,
+      folder: resolvedFolder,
       prompts,
       prompt_template,
       config: configWithModel,

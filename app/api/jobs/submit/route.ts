@@ -18,7 +18,7 @@ export async function POST(request: NextRequest) {
     const isRetry = body.retry === true;
 
     // Validate input
-    if (!mode || !groupId) {
+    if (!mode || (!groupId && !isRetry)) {
       return NextResponse.json(
         { error: "Missing required fields: mode, groupId" },
         { status: 400 }
@@ -35,16 +35,39 @@ export async function POST(request: NextRequest) {
     // Use provided jobId or generate new one
     const jobId = providedJobId || `job_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
+    // On retry: load existing job to restore fields
+    let resolvedGroupId = groupId;
+    let resolvedFolder = folder;
+    let existingJob: any = null;
+    if (isRetry) {
+      existingJob = await prisma.job.findUnique({ where: { id: jobId } });
+      if (!existingJob) {
+        return NextResponse.json({ error: "Job not found for retry" }, { status: 404 });
+      }
+      resolvedGroupId = existingJob.groupId;
+      const cfg = (existingJob.config || {}) as any;
+      resolvedFolder =
+        folder ||
+        cfg.folder ||
+        cfg.upload_folder ||
+        cfg.folder_path ||
+        cfg.folderPath;
+      if (!resolvedFolder) {
+        return NextResponse.json({ error: "Missing folder for retry" }, { status: 400 });
+      }
+    }
+
     // List image URLs from folder for database storage
     let imageUrls: string[] = [];
     const gcsConfig = getGcsConfig();
-    if (gcsConfig && folder) {
+    if (gcsConfig && (resolvedFolder || folder)) {
       try {
         const credentials = JSON.parse(process.env.GCS_SERVICE_ACCOUNT_KEY || "{}");
         const storage = new Storage({ credentials });
         const bucket = storage.bucket(gcsConfig.bucket_name);
         const pathPrefix = (process.env.GCS_PATH_PREFIX || "gemini-generate").replace(/\/+$/, "");
-        const prefix = `${pathPrefix}/${folder}${folder.endsWith("/") ? "" : "/"}`;
+        const resolved = resolvedFolder || folder;
+        const prefix = `${pathPrefix}/${resolved}${resolved.endsWith("/") ? "" : "/"}`;
         // const useCdn = false; // public GCS
 
         const [files] = await bucket.getFiles({ prefix });
@@ -59,16 +82,20 @@ export async function POST(request: NextRequest) {
 
     // Include model in config if provided
     const configWithModel = model 
-      ? { ...config, model }
-      : config;
+      ? { ...config, model, folder: resolvedFolder || folder }
+      : { ...config, ...(resolvedFolder || folder ? { folder: resolvedFolder || folder } : {}) };
 
     if (isRetry) {
       await prisma.job.update({
         where: { id: jobId },
         data: {
-          status: "queued",
+          status: "processing",
           error: null,
           updatedAt: new Date(),
+          config: {
+            ...(existingJob?.config || {}),
+            ...(configWithModel || {}),
+          },
         },
       });
     } else {
@@ -76,7 +103,7 @@ export async function POST(request: NextRequest) {
       await prisma.job.create({
         data: {
           id: jobId,
-          groupId,
+          groupId: resolvedGroupId,
           mode,
           status: "queued",
           images: imageUrls, // Store URLs for UI display
@@ -88,9 +115,10 @@ export async function POST(request: NextRequest) {
 
     // Normalize folder for worker (include path prefix)
     const pathPrefix = (process.env.GCS_PATH_PREFIX || "gemini-generate").replace(/\/+$/, "");
-    const folderForWorker = folder.startsWith(pathPrefix)
-      ? folder
-      : `${pathPrefix}/${folder.replace(/^\/+/, "")}`;
+    const useFolder = resolvedFolder || folder;
+    const folderForWorker = useFolder.startsWith(pathPrefix)
+      ? useFolder
+      : `${pathPrefix}/${useFolder.replace(/^\/+/, "")}`;
 
     // Submit to RunPod Serverless (async)
     // Note: Automatic mode with batch API is handled in /api/jobs/submit-batch (Next.js)
