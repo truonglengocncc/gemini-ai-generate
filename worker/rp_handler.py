@@ -205,6 +205,7 @@ async def handle_automatic_batch_mode(input_data: Dict[str, Any]) -> Dict[str, A
         "batch_job_names": batch_names,
         "batch_src_files": src_files,
         "request_keys": request_keys,
+        "refresh_worker": True,
     }
 
 async def handle_automatic_mode(input_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -325,7 +326,8 @@ async def handle_automatic_mode(input_data: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "status": "completed",
         "results": results,
-        "total_generated": len(results)
+        "total_generated": len(results),
+        "refresh_worker": True,
     }
 
 async def handle_semi_automatic_mode(input_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -438,7 +440,8 @@ async def handle_semi_automatic_mode(input_data: Dict[str, Any]) -> Dict[str, An
     return {
         "status": "completed",
         "results": results,
-        "total_generated": len([r for r in results if "gcs_url" in r or "image" in r])
+        "total_generated": len([r for r in results if "gcs_url" in r or "image" in r]),
+        "refresh_worker": True,
     }
 
 # ---------------------------------------------------------------------------- #
@@ -946,18 +949,24 @@ async def handle_fetch_results_mode(input_data: Dict[str, Any]) -> Dict[str, Any
     if gcs_config and results:
         gcs_client = initialize_gcs_client(gcs_config)
         uploaded = []
+        print(f"[fetch_results] uploading {len(results)} images to GCS")
         for idx, img in enumerate(results):
             if not img.get("base64"):
                 continue
-            buffer = base64.b64decode(img["base64"])
-            path = f"{job_id}/processed/batch/result_{idx}.png"
-            gcs_url = await upload_to_gcs_async(gcs_client, buffer, gcs_config, path)
-            uploaded.append({
-                "gcs_url": gcs_url,
-                "variation": img.get("variation"),
-                "original_index": img.get("original_index"),
-                "ratio": img.get("ratio"),
-            })
+            try:
+                buffer = base64.b64decode(img["base64"])
+                path = f"{job_id}/processed/batch/result_{idx}.png"
+                gcs_url = await upload_to_gcs_async(gcs_client, buffer, gcs_config, path)
+                uploaded.append({
+                    "gcs_url": gcs_url,
+                    "variation": img.get("variation"),
+                    "original_index": img.get("original_index"),
+                    "ratio": img.get("ratio"),
+                })
+                if (idx + 1) % 10 == 0:
+                    print(f"[fetch_results] uploaded {idx+1}/{len(results)}")
+            except Exception as e:
+                print(f"[fetch_results] upload failed idx={idx} err={e}")
         results = uploaded
 
     if files_to_delete:
@@ -965,6 +974,7 @@ async def handle_fetch_results_mode(input_data: Dict[str, Any]) -> Dict[str, Any
     if batch_names_to_delete:
         print(f"[fetch_results] batches retained for cleanup_group: {len(batch_names_to_delete)}")
 
+    print(f"[fetch_results] done total_images={len(results)} total_bytes={total_bytes}")
     return {
         "status": "completed",
         "results": results,
@@ -973,6 +983,7 @@ async def handle_fetch_results_mode(input_data: Dict[str, Any]) -> Dict[str, Any
         "response_files": response_files,
         "batch_job_names": batch_names_to_delete,
         "duration_sec": round(time.time() - start_time, 1),
+        "refresh_worker": True,
     }
 
 def extract_images_from_batch_line(parsed: Any) -> List[Dict[str, Any]]:
@@ -1000,9 +1011,6 @@ def extract_images_from_batch_line(parsed: Any) -> List[Dict[str, Any]]:
                     "original_index": int(match.group(3)) if match else None,
                 })
     return out
-
-def adjust_concurrency(current_concurrency: int) -> int:
-    return 20 if current_concurrency < 20 else current_concurrency
 
 # ---------------------------------------------------------------------------- #
 #                              Cleanup Group (GCS + Gemini)                    #
@@ -1150,6 +1158,5 @@ async def handle_cleanup_group(input_data: Dict[str, Any]) -> Dict[str, Any]:
 
 if __name__ == "__main__":
     runpod.serverless.start({
-        "handler": handler,
-        "concurrency_modifier": adjust_concurrency
+        "handler": handler
     })

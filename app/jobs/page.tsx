@@ -114,14 +114,14 @@ export default function JobsPage() {
     return 0;
   };
 
-  const retryFetch = async (jobId: string, mode: string) => {
+  const retryFetch = async (jobId: string, mode: string, useSaved: boolean) => {
     try {
       const url =
         mode === "automatic" ? "/api/jobs/submit-batch" : "/api/jobs/submit";
       const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ jobId, retry: true }),
+        body: JSON.stringify({ jobId, retry: true, use_preuploaded: useSaved }),
       });
       if (!res.ok) {
         const data = await res.json();
@@ -262,19 +262,25 @@ export default function JobsPage() {
                         {job.status === "failed" && (
                           <>
                             <button
-                              onClick={() => retryFetch(job.id, job.mode)}
+                              onClick={() =>
+                                fetch(`/api/jobs/${job.id}/check-batch`, { method: "POST" }).then(fetchJobs)
+                              }
+                              className="px-3 py-1 bg-purple-600 text-white rounded text-xs hover:bg-purple-700"
+                            >
+                              Fetch results
+                            </button>
+                            <button
+                              onClick={() => retryFetch(job.id, job.mode, false)}
                               className="px-3 py-1 bg-blue-600 text-white rounded text-xs hover:bg-blue-700"
                             >
-                              Retry
+                              Retry full
                             </button>
-                            {job.config?.batch_job_names && (
+                            {job.config?.batch_src_files?.length > 0 && (
                               <button
-                                onClick={() =>
-                                  fetch(`/api/jobs/${job.id}/check-batch`, { method: "POST" }).then(fetchJobs)
-                                }
-                                className="px-3 py-1 bg-purple-600 text-white rounded text-xs hover:bg-purple-700"
+                                onClick={() => retryFetch(job.id, job.mode, true)}
+                                className="px-3 py-1 bg-emerald-600 text-white rounded text-xs hover:bg-emerald-700"
                               >
-                                Fetch results
+                                Retry saved files
                               </button>
                             )}
                           </>
@@ -314,4 +320,3 @@ export default function JobsPage() {
     </div>
   );
 }
-

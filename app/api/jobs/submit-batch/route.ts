@@ -23,6 +23,7 @@ export async function POST(request: NextRequest) {
       image_urls, // optional public image URLs (if already uploaded)
     } = body;
     const isRetry = body.retry === true;
+    const usePreuploaded = body.use_preuploaded === true || body.full_retry === false;
 
     // Use provided jobId or generate new one
     const jobId = providedJobId || `job_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -56,7 +57,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const needsImages = !preuploadedJsonl.length;
+    const needsImages = !preuploadedJsonl.length && !usePreuploaded;
     if (needsImages && !resolvedFolder) {
       return NextResponse.json(
         { error: "Missing folder (GCS path)" },
