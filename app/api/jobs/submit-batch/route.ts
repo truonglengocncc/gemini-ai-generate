@@ -23,7 +23,8 @@ export async function POST(request: NextRequest) {
       image_urls, // optional public image URLs (if already uploaded)
     } = body;
 
-    // Validate input
+    // Validate input (skip heavy checks on retry)
+    const isRetry = body.retry === true;
     if (!groupId) {
       return NextResponse.json(
         { error: "Missing required field: groupId" },
@@ -31,14 +32,14 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (!folder) {
+    if (!folder && !isRetry) {
       return NextResponse.json(
         { error: "Missing required field: folder (GCS path)" },
         { status: 400 }
       );
     }
 
-    if ((!inline_data || inline_data.length === 0) && (!gcs_files || gcs_files.length === 0)) {
+    if (!isRetry && (!inline_data || inline_data.length === 0) && (!gcs_files || gcs_files.length === 0)) {
       return NextResponse.json(
         { error: "Missing inline_data or gcs_files. Upload must include images." },
         { status: 400 }
@@ -78,18 +79,30 @@ export async function POST(request: NextRequest) {
       ...(prompt_template ? { prompt_template } : {}),
     };
 
-    // Create job record in database
-    await prisma.job.create({
-      data: {
-        id: jobId,
-        groupId,
-        mode: "automatic",
-        status: "queued", // worker will update to batch_submitted via webhook
-        images: imageUrls,
-        prompts: prompts || [],
-        config: configWithModel || undefined,
-      },
-    });
+    if (isRetry) {
+      // For retry, update existing job to queued and clear errors
+      await prisma.job.update({
+        where: { id: jobId },
+        data: {
+          status: "queued",
+          error: null,
+          updatedAt: new Date(),
+        },
+      });
+    } else {
+      // Create job record in database
+      await prisma.job.create({
+        data: {
+          id: jobId,
+          groupId,
+          mode: "automatic",
+          status: "queued", // worker will update to batch_submitted via webhook
+          images: imageUrls,
+          prompts: prompts || [],
+          config: configWithModel || undefined,
+        },
+      });
+    }
 
     // Send payload to RunPod worker for batch submit
     await submitToRunPodBatch(jobId, {

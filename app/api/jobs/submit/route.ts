@@ -15,6 +15,7 @@ export async function POST(request: NextRequest) {
       model, // Model name (e.g., "gemini-2.5-flash-image")
       gcs_config,
     } = body;
+    const isRetry = body.retry === true;
 
     // Validate input
     if (!mode || !groupId) {
@@ -24,7 +25,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (!folder) {
+    if (!folder && !isRetry) {
       return NextResponse.json(
         { error: "Missing required field: folder (GCS path)" },
         { status: 400 }
@@ -61,18 +62,29 @@ export async function POST(request: NextRequest) {
       ? { ...config, model }
       : config;
 
-    // Create job record in database
-    await prisma.job.create({
-      data: {
-        id: jobId,
-        groupId,
-        mode,
-        status: "queued",
-        images: imageUrls, // Store URLs for UI display
-        prompts: prompts ? (Array.isArray(prompts) ? prompts : [prompts]) : undefined,
-        config: configWithModel || undefined,
-      },
-    });
+    if (isRetry) {
+      await prisma.job.update({
+        where: { id: jobId },
+        data: {
+          status: "queued",
+          error: null,
+          updatedAt: new Date(),
+        },
+      });
+    } else {
+      // Create job record in database
+      await prisma.job.create({
+        data: {
+          id: jobId,
+          groupId,
+          mode,
+          status: "queued",
+          images: imageUrls, // Store URLs for UI display
+          prompts: prompts ? (Array.isArray(prompts) ? prompts : [prompts]) : undefined,
+          config: configWithModel || undefined,
+        },
+      });
+    }
 
     // Normalize folder for worker (include path prefix)
     const pathPrefix = (process.env.GCS_PATH_PREFIX || "gemini-generate").replace(/\/+$/, "");

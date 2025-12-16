@@ -230,12 +230,34 @@ export default function JobsPage() {
                       {job.completedAt ? formatDate(job.completedAt) : "-"}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                      <Link
-                        href={`/jobs/${job.id}`}
-                        className="text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-200"
-                      >
-                        View Details
-                      </Link>
+                      <div className="flex items-center gap-2">
+                        <Link
+                          href={`/jobs/${job.id}`}
+                          className="text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-200"
+                        >
+                          View
+                        </Link>
+                        {job.status === "failed" && (
+                          <>
+                            <button
+                              onClick={() => retryFetch(job.id, job.mode)}
+                              className="px-3 py-1 bg-blue-600 text-white rounded text-xs hover:bg-blue-700"
+                            >
+                              Retry
+                            </button>
+                            {job.config?.batch_job_names && (
+                              <button
+                                onClick={() =>
+                                  fetch(`/api/jobs/${job.id}/check-batch`, { method: "POST" }).then(fetchJobs)
+                                }
+                                className="px-3 py-1 bg-purple-600 text-white rounded text-xs hover:bg-purple-700"
+                              >
+                                Fetch results
+                              </button>
+                            )}
+                          </>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -270,3 +292,24 @@ export default function JobsPage() {
     </div>
   );
 }
+  const retryFetch = async (jobId: string, mode: string) => {
+    try {
+      const url =
+        mode === "automatic" ? "/api/jobs/submit-batch" : "/api/jobs/submit";
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jobId, retry: true }),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        alert(data.error || "Retry failed");
+        return;
+      }
+      alert("Retry submitted. Please refresh in a moment.");
+      await fetchJobs();
+    } catch (e) {
+      console.error("Retry failed", e);
+      alert("Retry failed. Please try again.");
+    }
+  };

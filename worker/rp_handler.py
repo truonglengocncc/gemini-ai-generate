@@ -681,11 +681,26 @@ async def upload_to_gcs_async(gcs_client, image_bytes, gcs_config, filename) -> 
     return await loop.run_in_executor(None, upload_to_gcs_sync, gcs_client, gcs_config.get("bucket_name"), filename, image_bytes, gcs_config)
 
 def upload_to_gcs_sync(gcs_client, bucket_name, blob_path, image_bytes, gcs_config=None) -> str:
+    def prepend_gemini(path: str) -> str:
+        if not path:
+            return path
+        parts = path.rsplit("/", 1)
+        dir_part = parts[0] if len(parts) == 2 else ""
+        fname = parts[-1]
+        if fname.startswith("gemini-") or fname.startswith("gemini_"):
+            new_fname = fname
+        else:
+            new_fname = f"gemini-{fname}"
+        return f"{dir_part}/{new_fname}" if dir_part else new_fname
+
     # Prepend path prefix if provided
     if gcs_config:
         prefix = gcs_config.get("path_prefix") or gcs_config.get("path_prefixes") or gcs_config.get("root_prefix")
         if prefix:
             blob_path = f"{prefix.rstrip('/')}/{blob_path.lstrip('/')}"
+
+    # Ensure filename uniqueness by prepending 'gemini-'
+    blob_path = prepend_gemini(blob_path)
 
     bucket = gcs_client.bucket(bucket_name)
     blob = bucket.blob(blob_path)
@@ -857,6 +872,7 @@ async def handle_fetch_results_mode(input_data: Dict[str, Any]) -> Dict[str, Any
     if not api_key:
         return {"status": "failed", "error": "Missing GEMINI_API_KEY"}
 
+    start_time = time.time()
     results = []
     total_bytes = 0
     files_to_delete = []

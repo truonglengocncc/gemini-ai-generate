@@ -489,29 +489,57 @@ export default function JobDetailPage() {
           </div>
         )}
 
-        {job.status === "failed" && job.config?.batch_job_names && (
+        {job.status === "failed" && (
           <div className="bg-red-50 dark:bg-red-900/20 p-6 rounded-lg mt-4">
             <p className="text-red-800 dark:text-red-300 mb-3">
               Job failed: {job.error || "worker/network error"}
             </p>
-            <button
-              onClick={async () => {
-                setCheckingBatch(true);
-                try {
-                  await fetch(`/api/jobs/${job.id}/check-batch`, { method: "POST" });
-                  await fetchJobDetails();
-                } catch (err) {
-                  console.error("Retry fetch results failed", err);
-                  alert("Retry failed. Please try again.");
-                } finally {
-                  setCheckingBatch(false);
-                }
-              }}
-              disabled={checkingBatch}
-              className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-60 text-sm font-medium"
-            >
-              {checkingBatch ? "Retrying..." : "Retry fetch results"}
-            </button>
+            <div className="flex gap-3">
+              <button
+                onClick={async () => {
+                  setCheckingBatch(true);
+                  try {
+                    const url =
+                      job.mode === "automatic" ? "/api/jobs/submit-batch" : "/api/jobs/submit";
+                    await fetch(url, {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ jobId: job.id, retry: true }),
+                    });
+                    await fetchJobDetails();
+                  } catch (err) {
+                    console.error("Retry job failed", err);
+                    alert("Retry failed. Please try again.");
+                  } finally {
+                    setCheckingBatch(false);
+                  }
+                }}
+                disabled={checkingBatch}
+                className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-60 text-sm font-medium"
+              >
+                {checkingBatch ? "Retrying..." : "Retry job"}
+              </button>
+              {job.config?.batch_job_names && (
+                <button
+                  onClick={async () => {
+                    setCheckingBatch(true);
+                    try {
+                      await fetch(`/api/jobs/${job.id}/check-batch`, { method: "POST" });
+                      await fetchJobDetails();
+                    } catch (err) {
+                      console.error("Check batch failed", err);
+                      alert("Check batch failed. Please try again.");
+                    } finally {
+                      setCheckingBatch(false);
+                    }
+                  }}
+                  disabled={checkingBatch}
+                  className="px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-700 disabled:opacity-60 text-sm font-medium"
+                >
+                  {checkingBatch ? "Checking..." : "Fetch results again"}
+                </button>
+              )}
+            </div>
           </div>
         )}
 
