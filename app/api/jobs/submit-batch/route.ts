@@ -73,7 +73,7 @@ export async function POST(request: NextRequest) {
     }
 
     // List image URLs from folder for database storage
-    let imageUrls: string[] = [];
+    let imageUrls: string[] = Array.isArray(image_urls) ? image_urls : [];
     const gcsConfig = getGcsConfig();
     if (gcsConfig && (resolvedFolder || folder) && !preuploadedJsonl.length) {
       try {
@@ -87,9 +87,10 @@ export async function POST(request: NextRequest) {
         
         const [files] = await bucket.getFiles({ prefix });
         // Use public GCS URLs (CDN currently disabled)
-        imageUrls = files
+        const listed = files
           .filter(file => !file.name.endsWith("/"))
           .map(file => `https://storage.googleapis.com/${gcsConfig.bucket_name}/${file.name}`);
+        imageUrls = imageUrls.length ? imageUrls : listed;
       } catch (error) {
         console.error("Failed to list files from folder:", error);
       }
@@ -103,6 +104,11 @@ export async function POST(request: NextRequest) {
         const idx = parts.findIndex((p) => p === (gcsConfig?.bucket_name || ""));
         if (idx >= 0 && parts.length > idx + 1) {
           return parts.slice(idx + 1, -1).join("/");
+        }
+        // fallback: try to find "/gemini-generate/..." pattern
+        const gemIdx = parts.findIndex((p) => p === "gemini-generate");
+        if (gemIdx >= 0 && parts.length > gemIdx + 1) {
+          return parts.slice(gemIdx, -1).join("/");
         }
       } catch {}
       return undefined;
