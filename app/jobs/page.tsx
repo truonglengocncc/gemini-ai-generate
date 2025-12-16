@@ -114,6 +114,28 @@ export default function JobsPage() {
     return 0;
   };
 
+  const retryFetch = async (jobId: string, mode: string) => {
+    try {
+      const url =
+        mode === "automatic" ? "/api/jobs/submit-batch" : "/api/jobs/submit";
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jobId, retry: true }),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        alert(data.error || "Retry failed");
+        return;
+      }
+      alert("Retry submitted. Please refresh in a moment.");
+      await fetchJobs();
+    } catch (e) {
+      console.error("Retry failed", e);
+      alert("Retry failed. Please try again.");
+    }
+  };
+
   return (
     <div className="min-h-screen bg-zinc-50 dark:bg-black">
       <div className="container mx-auto px-4 py-8">
@@ -292,24 +314,4 @@ export default function JobsPage() {
     </div>
   );
 }
-  const retryFetch = async (jobId: string, mode: string) => {
-    try {
-      const url =
-        mode === "automatic" ? "/api/jobs/submit-batch" : "/api/jobs/submit";
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ jobId, retry: true }),
-      });
-      if (!res.ok) {
-        const data = await res.json();
-        alert(data.error || "Retry failed");
-        return;
-      }
-      alert("Retry submitted. Please refresh in a moment.");
-      await fetchJobs();
-    } catch (e) {
-      console.error("Retry failed", e);
-      alert("Retry failed. Please try again.");
-    }
-  };
+
