@@ -108,7 +108,10 @@ export async function POST(request: NextRequest) {
           status: "queued",
           images: imageUrls, // Store URLs for UI display
           prompts: prompts ? (Array.isArray(prompts) ? prompts : [prompts]) : undefined,
-          config: configWithModel || undefined,
+          config: {
+            ...(configWithModel || {}),
+            ...(resolvedFolder ? { folder: resolvedFolder } : {}),
+          },
         },
       });
     }

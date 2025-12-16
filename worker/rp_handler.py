@@ -65,10 +65,32 @@ async def handle_automatic_batch_mode(input_data: Dict[str, Any]) -> Dict[str, A
     image_urls = input_data.get("image_urls") or []
     inline_data = input_data.get("inline_data") or []
     gcs_config = input_data.get("gcs_config")
+    preuploaded_jsonl_files = input_data.get("preuploaded_jsonl_files") or []
 
     api_key = input_data.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY")
     if not api_key:
         return {"status": "failed", "error": "Missing GEMINI_API_KEY"}
+
+    # Fast path: reuse already-uploaded JSONL files (retry without needing folder/images)
+    if preuploaded_jsonl_files:
+        client = genai.Client(api_key=api_key)
+        batch_names: List[str] = []
+        for idx, file_uri in enumerate(preuploaded_jsonl_files):
+            src_uri = normalize_file_uri(file_uri)
+            batch = client.batches.create(
+                model=model_name,
+                src=src_uri,
+                config={"display_name": f"batch-job-{job_id}-retry-{idx}"},
+            )
+            bname = getattr(batch, "name", None) or getattr(batch, "batch", {}).get("name")
+            if bname:
+                batch_names.append(bname)
+        return {
+            "status": "batch_submitted",
+            "batch_job_names": batch_names,
+            "batch_src_files": preuploaded_jsonl_files,
+            "request_keys": [],
+        }
 
     # Expand prompt variables if template provided
     expanded_prompts = expand_prompt_template(prompt_template) if prompt_template else (prompts if isinstance(prompts, list) else [prompts])
