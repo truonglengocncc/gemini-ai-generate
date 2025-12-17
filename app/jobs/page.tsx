@@ -262,7 +262,7 @@ export default function JobsPage() {
                           ⋮
                         </button>
                         {openMenu === job.id && (
-                          <div className="absolute right-0 mt-2 w-48 bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-700 rounded shadow-lg z-20">
+                          <div className="absolute left-0 mt-2 w-48 bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-700 rounded shadow-lg z-20">
                             <Link
                               href={`/jobs/${job.id}`}
                               onClick={() => setOpenMenu(null)}
@@ -270,38 +270,34 @@ export default function JobsPage() {
                             >
                               View details
                             </Link>
-                            {job.status === "failed" && (
-                              <>
-                                <button
-                                  onClick={() => {
-                                    setOpenMenu(null);
-                                    fetch(`/api/jobs/${job.id}/check-batch`, { method: "POST" }).then(fetchJobs);
-                                  }}
-                                  className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 dark:hover:bg-zinc-800 text-purple-600 dark:text-purple-300"
-                                >
-                                  Fetch results
-                                </button>
-                                <button
-                                  onClick={() => {
-                                    setOpenMenu(null);
-                                    retryFetch(job.id, job.mode, false);
-                                  }}
-                                  className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 dark:hover:bg-zinc-800 text-blue-600"
-                                >
-                                  Retry full
-                                </button>
-                                {job.config?.batch_src_files?.length > 0 && (
-                                  <button
-                                    onClick={() => {
-                                      setOpenMenu(null);
-                                      retryFetch(job.id, job.mode, true);
-                                    }}
-                                    className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 dark:hover:bg-zinc-800 text-emerald-600"
-                                  >
-                                    Retry saved files
-                                  </button>
-                                )}
-                              </>
+                            <button
+                              onClick={() => {
+                                setOpenMenu(null);
+                                fetch(`/api/jobs/${job.id}/check-batch`, { method: "POST" }).then(fetchJobs);
+                              }}
+                              className="w-full block text-left px-4 py-2 text-sm hover:bg-gray-100 dark:hover:bg-zinc-800 text-purple-600 dark:text-purple-300"
+                            >
+                              Fetch results
+                            </button>
+                            <button
+                              onClick={() => {
+                                setOpenMenu(null);
+                                retryFetch(job.id, job.mode, false);
+                              }}
+                              className="w-full block text-left px-4 py-2 text-sm hover:bg-gray-100 dark:hover:bg-zinc-800 text-blue-600"
+                            >
+                              Retry full
+                            </button>
+                            {job.config?.batch_src_files?.length > 0 && (
+                              <button
+                                onClick={() => {
+                                  setOpenMenu(null);
+                                  retryFetch(job.id, job.mode, true);
+                                }}
+                                className="w-full block text-left px-4 py-2 text-sm hover:bg-gray-100 dark:hover:bg-zinc-800 text-emerald-600"
+                              >
+                                Retry saved files
+                              </button>
                             )}
                           </div>
                         )}
