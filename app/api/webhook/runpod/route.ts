@@ -58,11 +58,13 @@ export async function POST(request: NextRequest) {
       const batchNames = output.batch_job_names || [output.batch_job_name];
       const requestKeys = output.request_keys || [];
       const batchSrcFiles = output.batch_src_files || [];
+      const resourceJsonlGcsUrls = output.resource_jsonl_gcs_urls || [];
       updateData.status = "batch_submitted";
       updateData.config = {
         ...((job.config as any) || {}),
         batch_job_names: batchNames,
         batch_src_files: batchSrcFiles,
+        resource_jsonl_gcs_urls: resourceJsonlGcsUrls,
         request_keys: requestKeys,
       };
       console.log(`Job ${jobId} batch submitted: ${batchNames.join(",")}`);
@@ -81,6 +83,20 @@ export async function POST(request: NextRequest) {
     }
 
     if (status === "COMPLETED" && output) {
+      // Merge results to avoid duplicates on repeated fetches
+      const prev = (job.results as any)?.results;
+      const next = output?.results;
+      if (Array.isArray(prev) && Array.isArray(next)) {
+        const merged = [...prev, ...next];
+        const seen = new Set<string>();
+        output.results = merged.filter((r: any) => {
+          const key = r?.gcs_url || r?.image;
+          if (!key || seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+        output.total_generated = output.results.length;
+      }
       // Store full output in results field
       updateData.results = output;
       updateData.completedAt = new Date();
@@ -91,6 +107,9 @@ export async function POST(request: NextRequest) {
           ...((job.config as any) || {}),
           response_files: Array.isArray(output.response_files) ? output.response_files : (job.config as any)?.response_files,
           batch_job_names: Array.isArray(output.batch_job_names) ? output.batch_job_names : (job.config as any)?.batch_job_names,
+          response_jsonl_gcs_urls: Array.isArray(output.response_jsonl_gcs_urls)
+            ? output.response_jsonl_gcs_urls
+            : (job.config as any)?.response_jsonl_gcs_urls,
         };
       }
       

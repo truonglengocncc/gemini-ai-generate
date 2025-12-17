@@ -10,12 +10,18 @@ import asyncio
 import httpx
 import time
 import io
+import tempfile
 from typing import Dict, Any, List
 from google import genai
 from google.genai import types
 from google.cloud import storage
 from google.oauth2 import service_account
 import runpod
+
+def ensure_tmp_dir() -> str:
+    tmp_dir = os.getenv("TMPDIR") or "/tmp"
+    os.makedirs(tmp_dir, exist_ok=True)
+    return tmp_dir
 
 # ---------------------------------------------------------------------------- #
 #                               Handler Logic                                  #
@@ -66,6 +72,8 @@ async def handle_automatic_batch_mode(input_data: Dict[str, Any]) -> Dict[str, A
     inline_data = input_data.get("inline_data") or []
     gcs_config = input_data.get("gcs_config")
     preuploaded_jsonl_files = input_data.get("preuploaded_jsonl_files") or []
+    folder = input_data.get("folder")
+    save_jsonl_to_gcs = input_data.get("save_jsonl_to_gcs", True)
 
     api_key = input_data.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY")
     if not api_key:
@@ -90,6 +98,8 @@ async def handle_automatic_batch_mode(input_data: Dict[str, Any]) -> Dict[str, A
             "batch_job_names": batch_names,
             "batch_src_files": preuploaded_jsonl_files,
             "request_keys": [],
+            "resource_jsonl_gcs_urls": [],
+            "refresh_worker": True,
         }
 
     # Expand prompt variables if template provided
@@ -104,6 +114,16 @@ async def handle_automatic_batch_mode(input_data: Dict[str, Any]) -> Dict[str, A
             inline_images = await load_inline_images_from_urls(image_urls)
         elif gcs_files:
             inline_images = await load_inline_images_from_gcs(gcs_files, gcs_config)
+        elif folder and gcs_config:
+            # Retry-from-start path: list files from a GCS folder and load via public URLs
+            try:
+                gcs_client = initialize_gcs_client(gcs_config)
+                bucket_name = gcs_config.get("bucket_name")
+                urls = await list_files_from_gcs_folder(gcs_client, bucket_name, folder, gcs_config)
+                inline_images = await load_inline_images_from_urls(urls)
+                print(f"[automatic_batch] loaded {len(inline_images)} images from folder={folder}")
+            except Exception as e:
+                return {"status": "failed", "error": f"Failed to load images from folder: {e}"}
         else:
             return {"status": "failed", "error": "No images provided"}
     if not inline_images:
@@ -111,26 +131,78 @@ async def handle_automatic_batch_mode(input_data: Dict[str, Any]) -> Dict[str, A
 
     client = genai.Client(api_key=api_key)
 
-    MAX_JSONL_BYTES = 12 * 1024 * 1024  # stay under 20MB limit
-    MAX_REQUESTS = 200
+    # JSONL upload sizing (Batch API file mode):
+    # - Input file size limit can be up to 2GB, but you may still hit timeouts / memory / storage limits
+    #   if you create very large files. We use a higher default to reduce chunk count.
+    # - Count bytes precisely (utf-8 + newline) and NEVER cut base64.
+    #
+    # Override via env:
+    # - BATCH_JSONL_MAX_BYTES (bytes)
+    # - BATCH_JSONL_MAX_REQUESTS (lines per file)
+    # Default to 1536 MiB (1.5 GiB), a power-of-two multiple for nicer binary sizing.
+    # Override via env if needed.
+    MAX_JSONL_BYTES = int(os.getenv("BATCH_JSONL_MAX_BYTES", str(1536 * 1024 * 1024)))
+    MAX_REQUESTS = int(os.getenv("BATCH_JSONL_MAX_REQUESTS", "1000"))
 
     batch_names: List[str] = []
     src_files: List[str] = []
     request_keys: List[str] = []
     current_lines: List[str] = []
     current_size = 0
+    chunk_summaries: List[Dict[str, Any]] = []
+    resource_jsonl_gcs_urls: List[str] = []
+    gcs_client_for_resources = None
+    if gcs_config and save_jsonl_to_gcs:
+        try:
+            gcs_client_for_resources = initialize_gcs_client(gcs_config)
+        except Exception as e:
+            print(f"[automatic_batch] failed init gcs for resource jsonl: {e}")
+            gcs_client_for_resources = None
 
     def flush_chunk(chunk_idx: int):
-        nonlocal current_lines, current_size, batch_names
+        nonlocal current_lines, current_size, batch_names, resource_jsonl_gcs_urls
         if not current_lines:
             return
-        jsonl_content = "\n".join(current_lines)
-        jsonl_bytes = jsonl_content.encode("utf-8")
-        import tempfile, os
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".jsonl") as tmp:
-            tmp.write(jsonl_bytes)
-            tmp_path = tmp.name
+        tmp_dir = ensure_tmp_dir()
+        fd, tmp_path = tempfile.mkstemp(dir=tmp_dir, suffix=".jsonl")
+        bytes_written = 0
         try:
+            with os.fdopen(fd, "wb") as f:
+                for ln in current_lines:
+                    b = ln.encode("utf-8")
+                    f.write(b)
+                    f.write(b"\n")
+                    bytes_written += len(b) + 1
+        except Exception:
+            try:
+                os.close(fd)
+            except Exception:
+                pass
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
+            raise
+
+        chunk_summaries.append({
+            "chunk_idx": chunk_idx,
+            "lines": len(current_lines),
+            "bytes": bytes_written,
+        })
+        try:
+            if gcs_client_for_resources and gcs_config and save_jsonl_to_gcs:
+                try:
+                    gcs_url = upload_file_to_gcs_sync(
+                        gcs_client_for_resources,
+                        gcs_config.get("bucket_name"),
+                        tmp_path,
+                        f"{job_id}/resources/requests_chunk_{chunk_idx}.jsonl",
+                        gcs_config,
+                        content_type="application/jsonl",
+                    )
+                    resource_jsonl_gcs_urls.append(gcs_url)
+                except Exception as e:
+                    print(f"[automatic_batch] failed upload request jsonl to gcs chunk={chunk_idx}: {e}")
             uploaded = client.files.upload(
                 file=tmp_path,
                 config=types.UploadFileConfig(mime_type="application/jsonl", display_name=f"batch_requests_{job_id}_{chunk_idx}"),
@@ -188,7 +260,13 @@ async def handle_automatic_batch_mode(input_data: Dict[str, Any]) -> Dict[str, A
                     "request": request_obj,
                 })
                 request_keys.append(key)
-                line_size = len(line.encode("utf-8"))
+                line_size = len(line.encode("utf-8")) + 1  # + newline separator
+                if line_size > MAX_JSONL_BYTES:
+                    return {
+                        "status": "failed",
+                        "error": f"Single request too large for JSONL chunking (line_bytes={line_size} max_bytes={MAX_JSONL_BYTES}). "
+                                 f"Image index={img.get('index', 0)}. Please compress/resize or switch to file references.",
+                    }
                 if (current_size + line_size > MAX_JSONL_BYTES) or (request_count >= MAX_REQUESTS):
                     flush_chunk(len(batch_names))
                     request_count = 0
@@ -200,11 +278,18 @@ async def handle_automatic_batch_mode(input_data: Dict[str, Any]) -> Dict[str, A
     # flush remaining
     flush_chunk(len(batch_names))
 
+    print(f"[automatic_batch] job_id={job_id} requests={len(request_keys)} chunks={len(batch_names)} "
+          f"max_bytes={MAX_JSONL_BYTES} max_requests={MAX_REQUESTS}")
+    if chunk_summaries:
+        print(f"[automatic_batch] chunk_summaries={json.dumps(chunk_summaries[:10])}"
+              f"{' ...' if len(chunk_summaries) > 10 else ''}")
+
     return {
         "status": "batch_submitted",
         "batch_job_names": batch_names,
         "batch_src_files": src_files,
         "request_keys": request_keys,
+        "resource_jsonl_gcs_urls": resource_jsonl_gcs_urls,
         "refresh_worker": True,
     }
 
@@ -291,11 +376,6 @@ async def handle_automatic_mode(input_data: Dict[str, Any]) -> Dict[str, Any]:
                     timestamp = int(time.time() * 1000)
                     unique_id = f"{timestamp}_{idx}_{variation}"
                     path_prefix = f"{job_id}/processed" if job_id else "processed"
-                    # prepend global path prefix if provided
-                    if gcs_config:
-                        prefix = gcs_config.get("path_prefix") or gcs_config.get("path_prefixes") or gcs_config.get("root_prefix")
-                        if prefix:
-                            path_prefix = f"{prefix.rstrip('/')}/{path_prefix}"
                     
                     gcs_url = await upload_to_gcs_async(
                         gcs_client,
@@ -399,9 +479,6 @@ async def handle_semi_automatic_mode(input_data: Dict[str, Any]) -> Dict[str, An
                             timestamp = int(time.time() * 1000)
                             unique_id = f"{timestamp}_{img_idx}_{prompt_idx}_{gen_idx}"
                             path_prefix = f"{job_id}/processed" if job_id else "processed"
-                            prefix = gcs_config.get("path_prefix") or gcs_config.get("path_prefixes") or gcs_config.get("root_prefix")
-                            if prefix:
-                                path_prefix = f"{prefix.rstrip('/')}/{path_prefix}"
                             
                             gcs_url = await upload_to_gcs_async(
                                 gcs_client,
@@ -701,11 +778,11 @@ def initialize_gcs_client(gcs_config: Dict[str, Any]) -> storage.Client:
     credentials = service_account.Credentials.from_service_account_info(creds)
     return storage.Client(credentials=credentials)
 
-async def upload_to_gcs_async(gcs_client, image_bytes, gcs_config, filename) -> str:
+async def upload_to_gcs_async(gcs_client, image_bytes, gcs_config, filename, content_type: str = "image/jpeg") -> str:
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, upload_to_gcs_sync, gcs_client, gcs_config.get("bucket_name"), filename, image_bytes, gcs_config)
+    return await loop.run_in_executor(None, upload_to_gcs_sync, gcs_client, gcs_config.get("bucket_name"), filename, image_bytes, gcs_config, content_type)
 
-def upload_to_gcs_sync(gcs_client, bucket_name, blob_path, image_bytes, gcs_config=None) -> str:
+def upload_to_gcs_sync(gcs_client, bucket_name, blob_path, image_bytes, gcs_config=None, content_type: str = "image/jpeg") -> str:
     def prepend_gemini(path: str) -> str:
         if not path:
             return path
@@ -729,8 +806,60 @@ def upload_to_gcs_sync(gcs_client, bucket_name, blob_path, image_bytes, gcs_conf
 
     bucket = gcs_client.bucket(bucket_name)
     blob = bucket.blob(blob_path)
-    blob.upload_from_string(image_bytes, content_type="image/jpeg")
+    blob.upload_from_string(image_bytes, content_type=content_type or "application/octet-stream")
     # Always return public GCS URL (objects are uploaded public)
+    cdn = gcs_config.get("cdn_url") if gcs_config else None
+    if cdn:
+        return f"{cdn.rstrip('/')}/{blob_path}"
+    return f"https://storage.googleapis.com/{bucket_name}/{blob_path}"
+
+async def upload_file_to_gcs_async(
+    gcs_client,
+    local_path: str,
+    gcs_config: Dict[str, Any],
+    filename: str,
+    content_type: str = "application/octet-stream",
+) -> str:
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        None,
+        upload_file_to_gcs_sync,
+        gcs_client,
+        gcs_config.get("bucket_name"),
+        local_path,
+        filename,
+        gcs_config,
+        content_type,
+    )
+
+def upload_file_to_gcs_sync(
+    gcs_client,
+    bucket_name: str,
+    local_path: str,
+    blob_path: str,
+    gcs_config: Dict[str, Any] | None = None,
+    content_type: str = "application/octet-stream",
+) -> str:
+    # Prepend path prefix if provided
+    if gcs_config:
+        prefix = gcs_config.get("path_prefix") or gcs_config.get("path_prefixes") or gcs_config.get("root_prefix")
+        if prefix:
+            blob_path = f"{prefix.rstrip('/')}/{blob_path.lstrip('/')}"
+
+    # Ensure filename uniqueness by prepending 'gemini-'
+    parts = blob_path.rsplit("/", 1)
+    if len(parts) == 2:
+        d, f = parts
+        if not (f.startswith("gemini-") or f.startswith("gemini_")):
+            blob_path = f"{d}/gemini-{f}"
+    else:
+        if not (blob_path.startswith("gemini-") or blob_path.startswith("gemini_")):
+            blob_path = f"gemini-{blob_path}"
+
+    bucket = gcs_client.bucket(bucket_name)
+    blob = bucket.blob(blob_path)
+    blob.upload_from_filename(local_path, content_type=content_type or "application/octet-stream")
+
     cdn = gcs_config.get("cdn_url") if gcs_config else None
     if cdn:
         return f"{cdn.rstrip('/')}/{blob_path}"
@@ -891,6 +1020,7 @@ async def handle_fetch_results_mode(input_data: Dict[str, Any]) -> Dict[str, Any
     batch_names = input_data.get("batch_job_names") or input_data.get("batch_names") or []
     api_key = input_data.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY")
     gcs_config = input_data.get("gcs_config")
+    save_response_jsonl_to_gcs = input_data.get("save_response_jsonl_to_gcs", True)
 
     if not job_id or not batch_names:
         return {"status": "failed", "error": "Missing job_id or batch_job_names"}
@@ -902,6 +1032,7 @@ async def handle_fetch_results_mode(input_data: Dict[str, Any]) -> Dict[str, Any
     total_bytes = 0
     files_to_delete = []
     response_files = []
+    response_jsonl_gcs_urls: List[str] = []
     batch_names_to_delete = list(batch_names)
     print(f"[fetch_results] start group/job {input_data.get('group_id')}/{job_id} batches={batch_names}")
 
@@ -926,12 +1057,24 @@ async def handle_fetch_results_mode(input_data: Dict[str, Any]) -> Dict[str, Any
         batch_start = time.time()
         bytes_this_batch = 0
         images_this_batch = 0
+        tmp_out_path = None
+        batch_slug = str(name).split("/")[-1]
+        if gcs_config and save_response_jsonl_to_gcs:
+            tmp_out = tempfile.NamedTemporaryFile(delete=False, dir=ensure_tmp_dir(), suffix=f"_{batch_slug}.jsonl")
+            tmp_out_path = tmp_out.name
+            tmp_out.close()
         try:
             async for line in stream_jsonl_with_retry(download_url, timeout=90, attempts=2, follow_redirects=True):
                 if not line or not line.strip():
                     continue
                 bytes_this_batch += len(line.encode("utf-8")) + 1
                 total_bytes += len(line.encode("utf-8")) + 1
+                if tmp_out_path:
+                    try:
+                        with open(tmp_out_path, "ab") as f:
+                            f.write(line.encode("utf-8") + b"\n")
+                    except Exception as e:
+                        print(f"[fetch_results] failed write response jsonl tmp={tmp_out_path} err={e}")
                 try:
                     parsed = json.loads(line)
                     images = extract_images_from_batch_line(parsed)
@@ -941,22 +1084,79 @@ async def handle_fetch_results_mode(input_data: Dict[str, Any]) -> Dict[str, Any
                     continue
             duration = time.time() - batch_start
             print(f"[fetch_results] batch {name} done images={images_this_batch} bytes={bytes_this_batch} duration={duration:.1f}s")
+            if tmp_out_path and gcs_config and save_response_jsonl_to_gcs:
+                try:
+                    gcs_client = initialize_gcs_client(gcs_config)
+                    gcs_url = await upload_file_to_gcs_async(
+                        gcs_client,
+                        tmp_out_path,
+                        gcs_config,
+                        f"{job_id}/resources/responses_{batch_slug}.jsonl",
+                        content_type="application/jsonl",
+                    )
+                    response_jsonl_gcs_urls.append(gcs_url)
+                except Exception as e:
+                    print(f"[fetch_results] failed upload response jsonl batch={batch_slug} err={e}")
         except Exception as e:
             print(f"[fetch_results] download failed {download_url} error={e}")
             continue
+        finally:
+            if tmp_out_path:
+                try:
+                    os.remove(tmp_out_path)
+                except Exception:
+                    pass
 
     # Upload to GCS if configured
     if gcs_config and results:
         gcs_client = initialize_gcs_client(gcs_config)
         uploaded = []
+        bucket = gcs_client.bucket(gcs_config.get("bucket_name"))
         print(f"[fetch_results] uploading {len(results)} images to GCS")
         for idx, img in enumerate(results):
             if not img.get("base64"):
                 continue
             try:
                 buffer = base64.b64decode(img["base64"])
-                path = f"{job_id}/processed/batch/result_{idx}.png"
-                gcs_url = await upload_to_gcs_async(gcs_client, buffer, gcs_config, path)
+                ratio_slug = img.get("ratio_slug") or "default"
+                orig = img.get("original_index")
+                var = img.get("variation")
+                pidx = img.get("prompt_index")
+                if orig is None or var is None:
+                    filename = f"result_{idx}.png"
+                else:
+                    filename = f"p{pidx}_img{orig}_var{var}.png" if pidx is not None else f"img{orig}_var{var}.png"
+                path = f"{job_id}/processed/batch/{ratio_slug}/{filename}"
+
+                # Skip re-upload if already exists, but still return URL.
+                normalized_path = path
+                prefix = gcs_config.get("path_prefix") or gcs_config.get("path_prefixes") or gcs_config.get("root_prefix")
+                if prefix:
+                    normalized_path = f"{prefix.rstrip('/')}/{normalized_path.lstrip('/')}"
+                # apply gemini- prefix to filename segment (same as upload_to_gcs_sync)
+                parts = normalized_path.rsplit("/", 1)
+                if len(parts) == 2:
+                    d, f = parts
+                    if not (f.startswith("gemini-") or f.startswith("gemini_")):
+                        normalized_path = f"{d}/gemini-{f}"
+                else:
+                    if not (normalized_path.startswith("gemini-") or normalized_path.startswith("gemini_")):
+                        normalized_path = f"gemini-{normalized_path}"
+                blob = bucket.blob(normalized_path)
+                if blob.exists():
+                    cdn = gcs_config.get("cdn_url")
+                    if cdn:
+                        gcs_url = f"{cdn.rstrip('/')}/{normalized_path}"
+                    else:
+                        gcs_url = f"https://storage.googleapis.com/{gcs_config.get('bucket_name')}/{normalized_path}"
+                else:
+                    gcs_url = await upload_to_gcs_async(
+                        gcs_client,
+                        buffer,
+                        gcs_config,
+                        path,
+                        content_type=img.get("mimeType") or "image/png",
+                    )
                 uploaded.append({
                     "gcs_url": gcs_url,
                     "variation": img.get("variation"),
@@ -967,7 +1167,15 @@ async def handle_fetch_results_mode(input_data: Dict[str, Any]) -> Dict[str, Any
                     print(f"[fetch_results] uploaded {idx+1}/{len(results)}")
             except Exception as e:
                 print(f"[fetch_results] upload failed idx={idx} err={e}")
-        results = uploaded
+        # De-dup by URL in case multiple batches return same key
+        seen_urls = set()
+        results = []
+        for r in uploaded:
+            url = r.get("gcs_url")
+            if not url or url in seen_urls:
+                continue
+            seen_urls.add(url)
+            results.append(r)
 
     if files_to_delete:
         print(f"[fetch_results] files retained for cleanup_group: {len(files_to_delete)}")
@@ -981,6 +1189,7 @@ async def handle_fetch_results_mode(input_data: Dict[str, Any]) -> Dict[str, Any
         "total_generated": len(results),
         "total_bytes": total_bytes,
         "response_files": response_files,
+        "response_jsonl_gcs_urls": response_jsonl_gcs_urls,
         "batch_job_names": batch_names_to_delete,
         "duration_sec": round(time.time() - start_time, 1),
         "refresh_worker": True,
@@ -990,22 +1199,29 @@ def extract_images_from_batch_line(parsed: Any) -> List[Dict[str, Any]]:
     out = []
     response = parsed.get("response") or parsed
     candidates = response.get("candidates", [])
+    key = response.get("key") or parsed.get("key") or ""
     for cand in candidates:
         parts = cand.get("content", {}).get("parts", []) or cand.get("parts", [])
         for part in parts:
             inline = part.get("inlineData")
             if inline and inline.get("data"):
-                key = response.get("key") or parsed.get("key") or ""
                 match = None
                 ratio = None
+                ratio_slug = None
+                prompt_index = None
                 if key:
                     import re
                     match = re.search(r"r([0-9x]+)_p(\d+)_img(\d+)_var(\d+)", key)
                     if match:
                         ratio = match.group(1).replace("x", ":")
+                        ratio_slug = match.group(1)
+                        prompt_index = int(match.group(2))
                 out.append({
                     "base64": inline["data"],
                     "mimeType": inline.get("mimeType", "image/png"),
+                    "key": key,
+                    "ratio_slug": ratio_slug,
+                    "prompt_index": prompt_index,
                     "ratio": ratio,
                     "variation": int(match.group(4)) if match else None,
                     "original_index": int(match.group(3)) if match else None,
@@ -1040,6 +1256,7 @@ async def handle_cleanup_group(input_data: Dict[str, Any]) -> Dict[str, Any]:
     batch_names = input_data.get("batch_names") or input_data.get("batch_job_names") or []
     batch_src_files = input_data.get("batch_src_files") or []
     response_files = input_data.get("response_files") or []
+    purge_gemini_all = bool(input_data.get("purge_gemini_all") or input_data.get("purge_all_gemini"))
 
     # GCS cleanup
     if gcs_config:
@@ -1060,63 +1277,78 @@ async def handle_cleanup_group(input_data: Dict[str, Any]) -> Dict[str, Any]:
     if api_key:
         try:
             client = genai.Client(api_key=api_key)
-            files_to_delete = set()
-            for sf in batch_src_files:
-                files_to_delete.add(normalize_file_uri(sf))
-            for rf in response_files:
-                files_to_delete.add(normalize_file_uri(rf))
 
-            # Collect batch output/src files by explicit batch names
-            if batch_names:
-                for b in batch_names:
-                    try:
-                        batch = client.batches.get(name=b)
-                        b_display = getattr(batch, "display_name", None) or getattr(batch, "displayName", None) or ""
-                        b_name = getattr(batch, "name", "") or ""
-                        tied_to_job = any(j in (b_display or b_name) for j in job_ids)
-                        dest = getattr(batch, "dest", None) or getattr(batch, "output", None)
-                        if dest:
-                            fn = getattr(dest, "file_name", None) or getattr(dest, "fileName", None) or getattr(dest, "file", None)
-                            if fn and tied_to_job:
-                                files_to_delete.add(normalize_file_uri(fn))
-                        src_fn = getattr(batch, "src", None) or getattr(batch, "source", None) or getattr(batch, "input", None)
-                        if src_fn and tied_to_job:
-                            files_to_delete.add(normalize_file_uri(src_fn))
-                        if not tied_to_job:
-                            print(f"[cleanup] skip batch {b} (not linked to provided jobs)")
-                            continue
-                    except Exception as e:
-                        print(f"[cleanup] failed get batch {b}: {e}")
-
-            pager = client.files.list()
-            files = []
-            try:
-                for f in pager:
-                    files.append(f)
-            except TypeError:
-                files = (pager.files if hasattr(pager, "files") else getattr(pager, "result", None)) or []
-
-            for f in files:
-                name = getattr(f, "name", None) or getattr(f, "uri", None) or getattr(f, "file", None)
-                disp = getattr(f, "display_name", None) or getattr(f, "displayName", None) or ""
-                if not name:
-                    continue
-                norm = name if str(name).startswith("files/") else f"files/{str(name).split('/')[-1]}"
-                should_delete = norm in files_to_delete or any(j in (disp or name) for j in job_ids)
-                if not should_delete:
-                    continue
-                if any(j in (disp or name) for j in job_ids):
-                    matched_files += 1
+            # DANGEROUS: purge everything in Gemini project (Files + Batches).
+            # Guarded by an explicit flag + env allowlist to avoid accidental data loss.
+            if purge_gemini_all:
+                allow = os.getenv("ALLOW_GEMINI_PURGE_ALL")
+                if str(allow).lower() not in {"1", "true", "yes", "y"}:
+                    return {
+                        "status": "failed",
+                        "error": "purge_gemini_all requested but ALLOW_GEMINI_PURGE_ALL is not enabled",
+                    }
+                print("[cleanup] PURGE ALL GEMINI FILES + BATCHES requested (ALLOW_GEMINI_PURGE_ALL enabled)")
+                purged_files = 0
+                purged_batches = 0
+                # Delete all files
                 try:
-                    client.files.delete(name=norm)
-                    deleted_files += 1
-                    print(f"[cleanup] deleted Gemini file {norm}")
+                    for f in client.files.list():
+                        name = getattr(f, "name", None) or getattr(f, "uri", None)
+                        if not name:
+                            continue
+                        norm = name if str(name).startswith("files/") else f"files/{str(name).split('/')[-1]}"
+                        try:
+                            client.files.delete(name=norm)
+                            purged_files += 1
+                        except Exception as e:
+                            print(f"[cleanup] failed purge file {norm}: {e}")
                 except Exception as e:
-                    print(f"[cleanup] failed delete {norm}: {e}")
-                    continue
+                    print(f"[cleanup] list files failed during purge: {e}")
 
-            # delete batches
-            if batch_names:
+                # Delete all batches
+                try:
+                    for b in client.batches.list():
+                        bname = getattr(b, "name", None)
+                        if not bname:
+                            continue
+                        try:
+                            client.batches.delete(name=bname)
+                            purged_batches += 1
+                        except Exception as e:
+                            print(f"[cleanup] failed purge batch {bname}: {e}")
+                except Exception as e:
+                    print(f"[cleanup] list batches failed during purge: {e}")
+
+                return {
+                    "status": "completed",
+                    "deleted_gcs": deleted_gcs,
+                    "purged_gemini_files": purged_files,
+                    "purged_gemini_batches": purged_batches,
+                }
+
+            # Preferred: strict cleanup by explicit resource names (fast, avoids scanning).
+            files_to_delete = []
+            for sf in batch_src_files:
+                files_to_delete.append(normalize_file_uri(sf))
+            for rf in response_files:
+                files_to_delete.append(normalize_file_uri(rf))
+            # de-dup while keeping order
+            seen = set()
+            files_to_delete = [f for f in files_to_delete if not (f in seen or seen.add(f))]
+            batch_names = list(dict.fromkeys(batch_names))  # de-dup
+
+            if files_to_delete or batch_names:
+                print(f"[cleanup] strict delete files={len(files_to_delete)} batches={len(batch_names)}")
+
+                for furi in files_to_delete:
+                    try:
+                        client.files.delete(name=furi)
+                        deleted_files += 1
+                        matched_files += 1
+                        print(f"[cleanup] deleted Gemini file {furi}")
+                    except Exception as e:
+                        print(f"[cleanup] failed delete file {furi}: {e}")
+
                 for b in batch_names:
                     try:
                         client.batches.delete(name=b)
@@ -1126,24 +1358,8 @@ async def handle_cleanup_group(input_data: Dict[str, Any]) -> Dict[str, Any]:
                     except Exception as e:
                         print(f"[cleanup] failed delete batch {b}: {e}")
             else:
-                try:
-                    bpager = client.batches.list()
-                    batches = []
-                    for b in bpager:
-                        batches.append(b)
-                    for b in batches:
-                        bname = getattr(b, "name", "") or ""
-                        display = getattr(b, "display_name", None) or getattr(b, "displayName", None) or ""
-                        if any(j in (display or bname) for j in job_ids):
-                            matched_batches += 1
-                            try:
-                                client.batches.delete(name=bname)
-                                deleted_batches += 1
-                                print(f"[cleanup] deleted batch {bname}")
-                            except Exception as e:
-                                print(f"[cleanup] failed delete batch {bname}: {e}")
-                except Exception as e:
-                    print(f"[cleanup] list batches failed: {e}")
+                # No explicit lists provided -> no Gemini cleanup (avoid scanning whole project).
+                print("[cleanup] no batch/file lists provided; skipping Gemini cleanup")
         except Exception as e:
             return {"status": "failed", "error": f"Gemini cleanup failed: {e}"}
 

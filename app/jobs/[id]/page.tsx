@@ -117,6 +117,56 @@ export default function JobDetailPage() {
     }
   };
 
+  const canFetchResults = Array.isArray(job?.config?.batch_job_names) && job.config.batch_job_names.length > 0;
+  const canRetrySavedFiles = Array.isArray(job?.config?.batch_src_files) && job.config.batch_src_files.length > 0;
+  const canRetryFromStart = job?.mode === "automatic" && !!(job?.config?.folder || (job?.images && job.images.length > 0));
+
+  const fetchResultsAgain = async () => {
+    if (!job) return;
+    if (!confirm("Fetch batch results again?")) return;
+    setCheckingBatch(true);
+    try {
+      await fetch(`/api/jobs/${job.id}/check-batch`, { method: "POST" });
+      await fetchJobDetails();
+    } finally {
+      setCheckingBatch(false);
+    }
+  };
+
+  const retryFromStart = async () => {
+    if (!job) return;
+    if (!confirm("Retry this job from the start? This may create new batches.")) return;
+    setCheckingBatch(true);
+    try {
+      const url = job.mode === "automatic" ? "/api/jobs/submit-batch" : "/api/jobs/submit";
+      await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jobId: job.id, retry: true }),
+      });
+      await fetchJobDetails();
+    } finally {
+      setCheckingBatch(false);
+    }
+  };
+
+  const retryWithSavedFiles = async () => {
+    if (!job) return;
+    if (!confirm("Retry using saved JSONL files?")) return;
+    setCheckingBatch(true);
+    try {
+      const url = job.mode === "automatic" ? "/api/jobs/submit-batch" : "/api/jobs/submit";
+      await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jobId: job.id, retry: true, use_preuploaded: true }),
+      });
+      await fetchJobDetails();
+    } finally {
+      setCheckingBatch(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen bg-zinc-50 dark:bg-black p-8 flex items-center justify-center">
@@ -263,6 +313,41 @@ export default function JobDetailPage() {
               </Link>
             </div>
           </div>
+
+          {(canFetchResults || canRetrySavedFiles || canRetryFromStart) && (
+            <div className="mb-6 bg-white dark:bg-zinc-900 rounded-lg p-6 border border-zinc-200 dark:border-zinc-800">
+              <h3 className="text-lg font-semibold mb-3">Actions</h3>
+              <div className="flex flex-wrap gap-3">
+                {canFetchResults && (
+                  <button
+                    onClick={fetchResultsAgain}
+                    disabled={checkingBatch}
+                    className="px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-700 disabled:opacity-60 text-sm font-medium"
+                  >
+                    {checkingBatch ? "Working..." : "Fetch results"}
+                  </button>
+                )}
+                {canRetrySavedFiles && (
+                  <button
+                    onClick={retryWithSavedFiles}
+                    disabled={checkingBatch}
+                    className="px-4 py-2 bg-emerald-600 text-white rounded hover:bg-emerald-700 disabled:opacity-60 text-sm font-medium"
+                  >
+                    {checkingBatch ? "Working..." : "Retry saved files"}
+                  </button>
+                )}
+                {canRetryFromStart && (
+                  <button
+                    onClick={retryFromStart}
+                    disabled={checkingBatch}
+                    className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-60 text-sm font-medium"
+                  >
+                    {checkingBatch ? "Working..." : "Retry from start"}
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
 
           {job.prompts && job.prompts.length > 0 && (
             <div className="mb-6">
@@ -491,86 +576,9 @@ export default function JobDetailPage() {
 
         {job.status === "failed" && (
           <div className="bg-red-50 dark:bg-red-900/20 p-6 rounded-lg mt-4">
-            <p className="text-red-800 dark:text-red-300 mb-3">
+            <p className="text-red-800 dark:text-red-300">
               Job failed: {job.error || "worker/network error"}
             </p>
-            <div className="flex flex-wrap gap-3">
-              <button
-                onClick={async () => {
-                  if (!confirm("Fetch batch results again?")) return;
-                  setCheckingBatch(true);
-                  try {
-                    await fetch(`/api/jobs/${job.id}/check-batch`, { method: "POST" });
-                    await fetchJobDetails();
-                  } catch (err) {
-                    console.error("Fetch results failed", err);
-                    alert("Fetch results failed. Please try again.");
-                  } finally {
-                    setCheckingBatch(false);
-                  }
-                }}
-                disabled={checkingBatch}
-                className="px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-700 disabled:opacity-60 text-sm font-medium"
-              >
-                {checkingBatch ? "Checking..." : "Fetch results again"}
-              </button>
-              <button
-                onClick={async () => {
-                  if (!confirm("Retry this job from start? This may create new batches.")) return;
-                  setCheckingBatch(true);
-                  try {
-                    const url =
-                      job.mode === "automatic" ? "/api/jobs/submit-batch" : "/api/jobs/submit";
-                    await fetch(url, {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ jobId: job.id, retry: true, full_retry: true }),
-                    });
-                    await fetchJobDetails();
-                  } catch (err) {
-                    console.error("Retry job failed", err);
-                    alert("Retry failed. Please try again.");
-                  } finally {
-                    setCheckingBatch(false);
-                  }
-                }}
-                disabled={checkingBatch}
-                className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-60 text-sm font-medium"
-              >
-                {checkingBatch ? "Retrying..." : "Retry from start"}
-              </button>
-              {job.config?.batch_src_files?.length > 0 && (
-                <button
-                  onClick={async () => {
-                    if (!confirm("Retry using saved JSONL files?")) return;
-                    setCheckingBatch(true);
-                    try {
-                      const url =
-                        job.mode === "automatic" ? "/api/jobs/submit-batch" : "/api/jobs/submit";
-                      await fetch(url, {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                          jobId: job.id,
-                          retry: true,
-                          use_preuploaded: true,
-                        }),
-                      });
-                      await fetchJobDetails();
-                    } catch (err) {
-                      console.error("Retry with preuploaded failed", err);
-                      alert("Retry with saved files failed.");
-                    } finally {
-                      setCheckingBatch(false);
-                    }
-                  }}
-                  disabled={checkingBatch}
-                  className="px-4 py-2 bg-emerald-600 text-white rounded hover:bg-emerald-700 disabled:opacity-60 text-sm font-medium"
-                >
-                  {checkingBatch ? "Retrying..." : "Retry saved files"}
-                </button>
-              )}
-            </div>
           </div>
         )}
 

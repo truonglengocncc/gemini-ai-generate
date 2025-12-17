@@ -23,7 +23,7 @@ export async function POST(request: NextRequest) {
       image_urls, // optional public image URLs (if already uploaded)
     } = body;
     const isRetry = body.retry === true;
-    const usePreuploaded = body.use_preuploaded === true || body.full_retry === false;
+    const usePreuploaded = body.use_preuploaded === true;
 
     // Use provided jobId or generate new one
     const jobId = providedJobId || `job_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -47,6 +47,14 @@ export async function POST(request: NextRequest) {
         cfg.folder_path ||
         cfg.folderPath;
       preuploadedJsonl = cfg.batch_src_files || [];
+      // restore prompts/template/model for retries
+      const savedPrompts = Array.isArray(existingJob.prompts) ? existingJob.prompts : [];
+      const savedTemplate = cfg.prompt_template;
+      const savedModel = cfg.model;
+      (body as any).__resolvedPrompts = prompts ?? savedPrompts;
+      (body as any).__resolvedPromptTemplate = prompt_template ?? savedTemplate;
+      (body as any).__resolvedModel = model ?? savedModel;
+      (body as any).__savedConfig = cfg;
     }
 
     // Validate input (skip folder/images when we have preuploaded jsonl)
@@ -57,7 +65,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const needsImages = !preuploadedJsonl.length && !usePreuploaded;
+    const needsImages = !usePreuploaded;
     if (needsImages && !resolvedFolder) {
       return NextResponse.json(
         { error: "Missing folder (GCS path)" },
@@ -115,10 +123,16 @@ export async function POST(request: NextRequest) {
     };
 
     // Include model & prompt metadata in config if provided
+    const savedCfg = (body as any).__savedConfig || {};
+    const resolvedPrompts = (body as any).__resolvedPrompts ?? prompts ?? [];
+    const resolvedPromptTemplate = (body as any).__resolvedPromptTemplate ?? prompt_template;
+    const resolvedModel = (body as any).__resolvedModel ?? model;
+
     const configWithModel = {
+      ...savedCfg,
       ...config,
-      ...(model ? { model } : {}),
-      ...(prompt_template ? { prompt_template } : {}),
+      ...(resolvedModel ? { model: resolvedModel } : {}),
+      ...(resolvedPromptTemplate ? { prompt_template: resolvedPromptTemplate } : {}),
       ...(resolvedFolder ? { folder: resolvedFolder } : {}),
     };
 
@@ -153,7 +167,7 @@ export async function POST(request: NextRequest) {
           mode: "automatic",
           status: "queued", // worker will update to batch_submitted via webhook
           images: imageUrls,
-          prompts: prompts || [],
+          prompts: resolvedPrompts || [],
           config: {
             ...(configWithModel || {}),
             ...(resolvedFolder ? { folder: resolvedFolder } : {}),
@@ -163,20 +177,27 @@ export async function POST(request: NextRequest) {
     }
 
     // Send payload to RunPod worker for batch submit
-      await submitToRunPodBatch(jobId, {
-        mode: "automatic_batch",
-        groupId: resolvedGroupId,
-        jobId,
-        folder: resolvedFolder,
-        prompts,
-      prompt_template,
+    const gcsCfg = getGcsConfig();
+    const prefix = gcsCfg?.path_prefix || "";
+    const folderForWorker =
+      resolvedFolder && prefix && !resolvedFolder.startsWith(prefix)
+        ? `${prefix.replace(/\/+$/, "")}/${resolvedFolder.replace(/^\/+/, "")}`
+        : resolvedFolder;
+
+    await submitToRunPodBatch(jobId, {
+      mode: "automatic_batch",
+      groupId: resolvedGroupId,
+      jobId,
+      folder: folderForWorker,
+      prompts: resolvedPrompts,
+      prompt_template: resolvedPromptTemplate,
       config: configWithModel,
-      model: model || configWithModel.model || "gemini-2.5-flash-image",
+      model: resolvedModel || configWithModel.model || "gemini-2.5-flash-image",
       gcs_files: gcs_files || [],
       image_urls: image_urls || [],
       inline_data: inline_data || [],
       file_uris: file_uris || [],
-      ...(preuploadedJsonl.length > 0 ? { preuploaded_jsonl_files: preuploadedJsonl } : {}),
+      ...(usePreuploaded && preuploadedJsonl.length > 0 ? { preuploaded_jsonl_files: preuploadedJsonl } : {}),
     });
 
     return NextResponse.json({
