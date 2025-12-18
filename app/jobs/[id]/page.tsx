@@ -117,12 +117,27 @@ export default function JobDetailPage() {
     }
   };
 
-  const canFetchResults = Array.isArray(job?.config?.batch_job_names) && job.config.batch_job_names.length > 0;
+  const isAutomaticMode = job?.mode === "automatic";
+  const canFetchResults = isAutomaticMode && Array.isArray(job?.config?.batch_job_names) && job.config.batch_job_names.length > 0;
   const canRetrySavedFiles = Array.isArray(job?.config?.batch_src_files) && job.config.batch_src_files.length > 0;
   const canRetryFromStart = job?.mode === "automatic" && !!(job?.config?.folder || (job?.images && job.images.length > 0));
 
+  const refreshJobOnly = async () => {
+    if (!job) return;
+    setCheckingBatch(true);
+    try {
+      await fetchJobDetails();
+    } finally {
+      setCheckingBatch(false);
+    }
+  };
+
   const fetchResultsAgain = async () => {
     if (!job) return;
+    if (!isAutomaticMode) {
+      await refreshJobOnly();
+      return;
+    }
     if (!confirm("Fetch batch results again?")) return;
     setCheckingBatch(true);
     try {
@@ -208,10 +223,29 @@ export default function JobDetailPage() {
 
   const resultList: any[] = Array.isArray(job.results?.results) ? job.results.results : [];
   const generatedImages = resultList.map((r: any) => r.gcs_url).filter(Boolean);
+  const variationCount =
+    Number(job.config?.num_variations) ||
+    Number((job.config as any)?.config?.num_variations) ||
+    Number((job.config as any)?.config?.config?.num_variations) ||
+    1;
+  const rawAspectRatios =
+    (job.config as any)?.aspect_ratios ||
+    (job.config as any)?.config?.aspect_ratios ||
+    (job.config as any)?.config?.config?.aspect_ratios;
+  const aspectRatioValue =
+    (job.config as any)?.aspect_ratio ||
+    (job.config as any)?.config?.aspect_ratio ||
+    (job.config as any)?.config?.config?.aspect_ratio;
+  const ratioCount =
+    Array.isArray(rawAspectRatios) && rawAspectRatios.length > 0
+      ? rawAspectRatios.length
+      : aspectRatioValue
+        ? 1
+        : 1;
   const expectedImages =
-    (Array.isArray(job.images) ? job.images.length : 0) *
-    (job.config?.num_variations || job.config?.config?.num_variations || job.config?.config?.config?.num_variations || 1) *
-    ((job.config as any)?.aspect_ratios?.length || (job.config as any)?.aspect_ratio ? ((job.config as any)?.aspect_ratios?.length || 1) : 1);
+    job.mode === "text-image"
+      ? (Array.isArray(job.prompts) ? job.prompts.length : 0) * Math.max(1, variationCount)
+      : (Array.isArray(job.images) ? job.images.length : 0) * Math.max(1, variationCount) * ratioCount;
 
   const handleClientDownload = async () => {
     if (!job) return;
@@ -508,22 +542,32 @@ export default function JobDetailPage() {
             <p className="text-yellow-800 dark:text-yellow-300 mb-3">
               Job completed but no generated images found.
             </p>
-            <button
-              onClick={async () => {
-                setRefreshing(true);
-                try {
-                  await fetch(`/api/jobs/${job.id}/check-batch`, { method: "POST" });
-                  await fetchJobDetails();
-                } catch (err) {
-                  console.error("Failed to refresh from worker", err);
-                }
-                setRefreshing(false);
-              }}
-              className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm font-medium disabled:opacity-60"
-              disabled={refreshing}
-            >
-              {refreshing ? "Refreshing..." : "Fetch results again"}
-            </button>
+            {isAutomaticMode ? (
+              <button
+                onClick={async () => {
+                  setRefreshing(true);
+                  try {
+                    await fetch(`/api/jobs/${job.id}/check-batch`, { method: "POST" });
+                    await fetchJobDetails();
+                  } catch (err) {
+                    console.error("Failed to refresh from worker", err);
+                  }
+                  setRefreshing(false);
+                }}
+                className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm font-medium disabled:opacity-60"
+                disabled={refreshing}
+              >
+                {refreshing ? "Refreshing..." : "Fetch results again"}
+              </button>
+            ) : (
+              <button
+                onClick={refreshJobOnly}
+                className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm font-medium disabled:opacity-60"
+                disabled={checkingBatch}
+              >
+                {checkingBatch ? "Refreshing..." : "Refresh page state"}
+              </button>
+            )}
           </div>
         )}
 
@@ -532,45 +576,67 @@ export default function JobDetailPage() {
             <p className="text-yellow-800 dark:text-yellow-300 mb-3">
               Generated {generatedImages.length}/{expectedImages} images. You can fetch again to check for more results.
             </p>
-            <button
-              onClick={async () => {
-                setRefreshing(true);
-                try {
-                  await fetch(`/api/jobs/${job.id}/check-batch`, { method: "POST" });
-                  await fetchJobDetails();
-                } catch (err) {
-                  console.error("Failed to refresh from worker", err);
-                }
-                setRefreshing(false);
-              }}
-              className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm font-medium disabled:opacity-60"
-              disabled={refreshing}
-            >
-              {refreshing ? "Refreshing..." : "Fetch results again"}
-            </button>
+            {isAutomaticMode ? (
+              <button
+                onClick={async () => {
+                  setRefreshing(true);
+                  try {
+                    await fetch(`/api/jobs/${job.id}/check-batch`, { method: "POST" });
+                    await fetchJobDetails();
+                  } catch (err) {
+                    console.error("Failed to refresh from worker", err);
+                  }
+                  setRefreshing(false);
+                }}
+                className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm font-medium disabled:opacity-60"
+                disabled={refreshing}
+              >
+                {refreshing ? "Refreshing..." : "Fetch results again"}
+              </button>
+            ) : (
+              <button
+                onClick={refreshJobOnly}
+                className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm font-medium disabled:opacity-60"
+                disabled={checkingBatch}
+              >
+                {checkingBatch ? "Refreshing..." : "Refresh page state"}
+              </button>
+            )}
           </div>
         )}
 
         {job.status === "processing" && generatedImages.length < expectedImages && (
           <div className="bg-blue-50 dark:bg-blue-900/20 p-6 rounded-lg">
             <p className="text-blue-800 dark:text-blue-300">
-              Job is currently processing. Refresh the page to see updates.
+              {isAutomaticMode
+                ? "Job is currently processing. Refresh the page to see updates."
+                : "Job is processing on the worker. Refresh the page in a bit to see new images."}
             </p>
-            <button
-              onClick={async () => {
-                setRefreshing(true);
-                try {
-                  await fetch(`/api/jobs/${job.id}/check-batch`, { method: "POST" });
-                  await fetchJobDetails();
-                } finally {
-                  setRefreshing(false);
-                }
-              }}
-              className="mt-4 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-60"
-              disabled={refreshing}
-            >
-              {refreshing ? "Refreshing..." : "Fetch results again"}
-            </button>
+            {isAutomaticMode ? (
+              <button
+                onClick={async () => {
+                  setRefreshing(true);
+                  try {
+                    await fetch(`/api/jobs/${job.id}/check-batch`, { method: "POST" });
+                    await fetchJobDetails();
+                  } finally {
+                    setRefreshing(false);
+                  }
+                }}
+                className="mt-4 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-60"
+                disabled={refreshing}
+              >
+                {refreshing ? "Refreshing..." : "Fetch results again"}
+              </button>
+            ) : (
+              <button
+                onClick={refreshJobOnly}
+                className="mt-4 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-60"
+                disabled={checkingBatch}
+              >
+                {checkingBatch ? "Refreshing..." : "Refresh page state"}
+              </button>
+            )}
           </div>
         )}
 

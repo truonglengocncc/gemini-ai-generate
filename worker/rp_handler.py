@@ -43,6 +43,8 @@ async def handler(job):
         return await handle_fetch_results_mode(input_data)
     elif mode == 'cleanup_group':
         return await handle_cleanup_group(input_data)
+    elif mode == 'text-image':
+        return await handle_text_image_mode(input_data)
     else:
         return {
             "error": f"Invalid mode: {mode}"
@@ -522,6 +524,104 @@ async def handle_semi_automatic_mode(input_data: Dict[str, Any]) -> Dict[str, An
     }
 
 # ---------------------------------------------------------------------------- #
+#                        Text-to-Image (Prompt only)                           #
+# ---------------------------------------------------------------------------- #
+
+async def handle_text_image_mode(input_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Generate images directly from prompts (no reference image) using Gemini text-to-image.
+    Uploads results to GCS and returns metadata similar to automatic modes.
+    """
+    prompts = input_data.get("prompts")
+    prompt_template = input_data.get("prompt_template")
+    config = input_data.get("config", {}) or {}
+    model_name = input_data.get("model") or config.get("model") or "gemini-3-pro-image-preview"
+    num_variations = max(1, int(config.get("num_variations") or 1))
+    aspect_ratio = config.get("aspect_ratio") or "1:1"
+    ratio_slug = str(aspect_ratio).replace(":", "x")
+    resolution = config.get("resolution")
+    if model_name == "gemini-3-pro-image-preview":
+        if resolution:
+            resolution = str(resolution).upper()
+            if resolution not in {"1K", "2K", "4K"}:
+                print(f"[text-image] invalid resolution '{resolution}' for {model_name}, fallback 1K")
+                resolution = "1K"
+        else:
+            resolution = "1K"
+    gcs_config = input_data.get("gcs_config")
+    job_id = input_data.get("job_id") or input_data.get("jobId") or f"text_job_{int(time.time())}"
+    api_key = input_data.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY")
+
+    if not api_key:
+        return {"status": "failed", "error": "Missing GEMINI_API_KEY"}
+    if not gcs_config:
+        return {"status": "failed", "error": "Missing GCS config for upload"}
+
+    prompt_list: List[str] = []
+    if isinstance(prompts, list):
+        prompt_list = [str(p).strip() for p in prompts if str(p).strip()]
+    elif isinstance(prompts, str) and prompts.strip():
+        prompt_list = [prompts.strip()]
+    if not prompt_list and prompt_template:
+        prompt_list = [p for p in expand_prompt_template(str(prompt_template)) if p.strip()]
+
+    if not prompt_list:
+        return {"status": "failed", "error": "No prompts provided for text-image mode"}
+
+    try:
+        gcs_client = initialize_gcs_client(gcs_config)
+    except Exception as e:
+        return {"status": "failed", "error": f"Failed to init GCS client: {e}"}
+
+    total_generated = 0
+    results: List[Dict[str, Any]] = []
+
+    for prompt_index, prompt_text in enumerate(prompt_list):
+        for variation in range(num_variations):
+            try:
+                images = await generate_images_from_prompt_http(
+                    prompt_text,
+                    api_key=api_key,
+                    model_name=model_name,
+                    aspect_ratio=aspect_ratio,
+                    resolution=resolution,
+                )
+                for img_idx, img in enumerate(images):
+                    filename = build_text_image_path(job_id, ratio_slug, prompt_index, variation, img_idx)
+                    gcs_url = await upload_to_gcs_async(
+                        gcs_client,
+                        img["bytes"],
+                        gcs_config,
+                        filename,
+                        content_type=img.get("mime_type") or "image/png",
+                    )
+                    results.append({
+                        "original_index": prompt_index,
+                        "variation": variation,
+                        "ratio": aspect_ratio,
+                        "gcs_url": gcs_url,
+                        "prompt": prompt_text,
+                    })
+                    total_generated += 1
+            except Exception as e:
+                err_msg = str(e)
+                print(f"[text-image] prompt_idx={prompt_index} variation={variation} error={err_msg}")
+                results.append({
+                    "original_index": prompt_index,
+                    "variation": variation,
+                    "ratio": aspect_ratio,
+                    "error": err_msg,
+                    "prompt": prompt_text,
+                })
+
+    return {
+        "status": "completed",
+        "results": results,
+        "total_generated": total_generated,
+        "refresh_worker": True,
+    }
+
+# ---------------------------------------------------------------------------- #
 #                            Gemini Generation Logic                           #
 # ---------------------------------------------------------------------------- #
 
@@ -864,6 +964,68 @@ def upload_file_to_gcs_sync(
     if cdn:
         return f"{cdn.rstrip('/')}/{blob_path}"
     return f"https://storage.googleapis.com/{bucket_name}/{blob_path}"
+
+async def generate_images_from_prompt_http(
+    prompt: str,
+    *,
+    api_key: str,
+    model_name: str,
+    aspect_ratio: str | None = None,
+    resolution: str | None = None,
+) -> List[Dict[str, Any]]:
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+    image_config = {}
+    if aspect_ratio:
+        image_config["aspectRatio"] = aspect_ratio
+    if resolution:
+        image_config["imageSize"] = resolution
+
+    payload: Dict[str, Any] = {
+        "contents": [
+            {
+                "role": "user",
+                "parts": [{"text": prompt}],
+            }
+        ],
+        "generationConfig": {
+            "responseModalities": ["IMAGE"],
+        },
+    }
+    if image_config:
+        payload["generationConfig"]["imageConfig"] = image_config
+    async with httpx.AsyncClient(timeout=120) as client:
+        resp = await client.post(url, json=payload)
+        if resp.status_code >= 400:
+            raise ValueError(f"Gemini text-image error {resp.status_code}: {resp.text}")
+        data = resp.json()
+    images: List[Dict[str, Any]] = []
+    candidates = data.get("candidates") or []
+    for candidate in candidates:
+        parts = []
+        content = candidate.get("content")
+        if content and isinstance(content, dict):
+            parts = content.get("parts") or []
+        elif candidate.get("parts"):
+            parts = candidate.get("parts")
+        for part in parts or []:
+            inline = part.get("inlineData") or part.get("inline_data")
+            if inline and inline.get("data"):
+                try:
+                    img_bytes = base64.b64decode(inline["data"])
+                except Exception:
+                    continue
+                images.append({
+                    "bytes": img_bytes,
+                    "mime_type": inline.get("mimeType") or inline.get("mime_type") or "image/png",
+                })
+    if not images:
+        raise ValueError("Gemini returned no image data")
+    return images
+
+def build_text_image_path(job_id: str, ratio_slug: str, prompt_index: int, variation: int, image_idx: int) -> str:
+    ts = int(time.time() * 1000)
+    safe_ratio = ratio_slug or "default"
+    return f"{job_id}/processed/text-image/{safe_ratio}/prompt_{prompt_index}/variation_{variation}_{ts}_{image_idx}.png"
 
 def expand_prompt_template(template: str) -> List[str]:
     if not template:

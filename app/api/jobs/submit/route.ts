@@ -245,44 +245,54 @@ async function submitToRunPod(jobId: string, payload: any) {
   console.log("=".repeat(80));
 
   try {
-    const response = await fetch(runpodEndpoint, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${process.env.RUNPOD_API_KEY}`,
-      },
-      body: JSON.stringify(requestBody),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error(`[${new Date().toISOString()}] RunPod API error for job ${jobId}:`, {
-        status: response.status,
-        statusText: response.statusText,
-        error: errorText,
-      });
-      throw new Error(`RunPod API error: ${response.statusText} - ${errorText}`);
-    }
-
-    const result = await response.json();
+    const result = await postRunpodWithRetry(runpodEndpoint, requestBody, jobId);
     console.log(`[${new Date().toISOString()}] RunPod response received for job ${jobId}:`, {
       runpodJobId: result.id,
       hasOutput: !!result.output,
       status: result.status || "unknown",
     });
-
-    // Note: Job results will be updated by webhook using job_id from input
-    // We don't need to save RunPod's ID since webhook will use our job_id
+    // Webhook will update DB later
   } catch (error: any) {
     console.error(`[${new Date().toISOString()}] Error submitting to RunPod for job ${jobId}:`, error);
-    // Update job status in database on error
     await prisma.job.update({
       where: { id: jobId },
       data: {
         status: "failed",
-        error: error.message,
+        error: error?.message || "submitToRunPod failed",
       },
     });
     throw error;
   }
+}
+
+async function postRunpodWithRetry(endpoint: string, body: any, jobId: string, attempts = 3) {
+  let lastError: any = null;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${process.env.RUNPOD_API_KEY}`,
+        },
+        body: JSON.stringify(body),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`RunPod API error: ${response.status} ${response.statusText} - ${errorText}`);
+      }
+
+      return await response.json();
+    } catch (error) {
+      lastError = error;
+      if (attempt === attempts) {
+        break;
+      }
+      const backoffMs = attempt * 1500;
+      console.warn(`RunPod fetch failed for job ${jobId} (attempt ${attempt}/${attempts - 1}). Retrying in ${backoffMs}ms...`, error);
+      await new Promise((resolve) => setTimeout(resolve, backoffMs));
+    }
+  }
+  throw lastError;
 }

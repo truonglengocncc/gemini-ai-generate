@@ -14,7 +14,7 @@ export default function Home() {
         </div>
 
         {/* Mode Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-12">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-8 mb-12">
           <Link
             href="/automatic"
             className="bg-white dark:bg-zinc-900 p-8 rounded-xl border-2 border-zinc-200 dark:border-zinc-800 hover:border-blue-500 transition-all hover:shadow-lg"
@@ -48,6 +48,23 @@ export default function Home() {
               <li>✓ Multiple prompts per group</li>
               <li>✓ Batch processing (4 imgs/batch)</li>
               <li>✓ Queue management</li>
+            </ul>
+          </Link>
+
+          <Link
+            href="/text-image"
+            className="bg-white dark:bg-zinc-900 p-8 rounded-xl border-2 border-zinc-200 dark:border-zinc-800 hover:border-blue-500 transition-all hover:shadow-lg"
+          >
+            <div className="text-4xl mb-4">🖌️</div>
+            <h2 className="text-2xl font-semibold mb-3">Text-to-Image Mode</h2>
+            <p className="text-zinc-600 dark:text-zinc-400 mb-4">
+              Generate images from scratch using Gemini image generation without uploading reference photos.
+            </p>
+            <ul className="text-sm text-zinc-500 space-y-2">
+              <li>✓ Prompt template expansion</li>
+              <li>✓ Multiple aspect ratios</li>
+              <li>✓ Variations per prompt</li>
+              <li>✓ Directly saved to groups</li>
             </ul>
           </Link>
         </div>
