@@ -56,34 +56,49 @@ export default function GroupDetailPage() {
       if (!res.ok) throw new Error("Failed to fetch file list");
       const data = await res.json();
       const files: Array<{ url: string; filename: string }> = data.files || [];
-      const zip = new JSZip();
+      if (files.length === 0) {
+        alert("No files found to download.");
+        return;
+      }
 
-      let idx = 0;
-      const limit = 8;
-      const worker = async () => {
-        while (idx < files.length) {
-          const current = files[idx++];
-          try {
-            const r = await fetch(current.url);
-            if (!r.ok) continue;
-            const blob = await r.blob();
-            zip.file(current.filename, blob);
-          } catch (e) {
-            console.error("client download failed", current.url, e);
+      const chunkSize = files.length > 200 ? 100 : files.length;
+      const totalChunks = Math.ceil(files.length / chunkSize);
+      if (totalChunks > 1 && !confirm(`Large download detected (${files.length} images). Download in ${totalChunks} zip parts?`)) {
+        return;
+      }
+
+      const downloadChunk = async (chunkFiles: Array<{ url: string; filename: string }>, partIndex: number) => {
+        const zip = new JSZip();
+        let idx = 0;
+        const limit = 6;
+        const worker = async () => {
+          while (idx < chunkFiles.length) {
+            const current = chunkFiles[idx++];
+            try {
+              const r = await fetch(current.url);
+              if (!r.ok) continue;
+              const blob = await r.blob();
+              zip.file(current.filename, blob);
+            } catch (e) {
+              console.error("client download failed", current.url, e);
+            }
           }
-        }
+        };
+
+        await Promise.all(Array.from({ length: Math.min(limit, chunkFiles.length) }, () => worker()));
+
+        const content = await zip.generateAsync({ type: "blob" });
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(content);
+        a.download = totalChunks > 1 ? `${groupId}_images_part_${partIndex + 1}.zip` : `${groupId}_images.zip`;
+        a.click();
+        URL.revokeObjectURL(a.href);
       };
 
-      await Promise.all(
-        Array.from({ length: Math.min(limit, files.length) }, () => worker())
-      );
-
-      const content = await zip.generateAsync({ type: "blob" });
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(content);
-      a.download = `${groupId}_images.zip`;
-      a.click();
-      URL.revokeObjectURL(a.href);
+      for (let i = 0; i < totalChunks; i++) {
+        const chunkFiles = files.slice(i * chunkSize, (i + 1) * chunkSize);
+        await downloadChunk(chunkFiles, i);
+      }
     } catch (e) {
       console.error("Client group download failed", e);
       alert("Client ZIP failed. Please try server download.");
