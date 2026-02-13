@@ -7,30 +7,32 @@ import { prisma } from "@/lib/prisma";
  * RunPod will POST to this endpoint when a job completes.
  * Configure the webhook URL in RunPod Serverless endpoint settings.
  */
-export async function POST(request: NextRequest) {
-  try {
-    const body = await request.json();
+const LOG = "[webhook/runpod]";
 
-    // RunPod webhook format: https://docs.runpod.io/serverless/workers/webhooks
+export async function POST(request: NextRequest) {
+  const start = Date.now();
+  try {
+    console.log(`${LOG} POST received`);
+    const body = await request.json();
     const { id: runpodJobId, status, output, error, input } = body;
-    
+    console.log(`${LOG} body parsed | runpodId=${runpodJobId} status=${status} keys=${Object.keys(body).join(",")}`);
+
     // Handle cleanup webhook (no job_id)
     if (input?.mode === "cleanup_group") {
+      console.log(`${LOG} cleanup_group ignored`);
       return NextResponse.json({ success: true, mode: "cleanup_group" });
     }
 
-    // Extract our job_id from input payload
     const jobId = input?.job_id;
-    
     if (!jobId) {
-      console.error("Missing job_id in webhook input:", input);
+      console.error(`${LOG} missing job_id in input:`, JSON.stringify(input).slice(0, 200));
       return NextResponse.json(
         { error: "Missing job_id in input payload" },
         { status: 400 }
       );
     }
 
-    // Find job by our job_id (not RunPod's ID)
+    console.log(`${LOG} findUnique jobId=${jobId}`);
     const job = await prisma.job.findUnique({
       where: {
         id: jobId,
@@ -38,14 +40,13 @@ export async function POST(request: NextRequest) {
     });
 
     if (!job) {
-      console.warn(`Job not found for job_id: ${jobId} (RunPod ID: ${runpodJobId})`);
+      console.warn(`${LOG} job not found jobId=${jobId} runpodId=${runpodJobId}`);
       return NextResponse.json(
         { error: "Job not found" },
         { status: 404 }
       );
     }
-    
-    console.log(`Processing webhook for job: ${jobId} (RunPod ID: ${runpodJobId})`);
+    console.log(`${LOG} job found jobId=${jobId} runpodId=${runpodJobId}`);
 
     // Update job status and results
     const updateData: any = {
@@ -67,13 +68,13 @@ export async function POST(request: NextRequest) {
         resource_jsonl_gcs_urls: resourceJsonlGcsUrls,
         request_keys: requestKeys,
       };
-      console.log(`Job ${jobId} batch submitted: ${batchNames.join(",")}`);
-      
+      console.log(`${LOG} batch_submitted jobId=${jobId} batchNames=${batchNames.join(",")}`);
       await prisma.job.update({
         where: { id: job.id },
         data: updateData,
       });
 
+      console.log(`${LOG} response batch_submitted jobId=${jobId} duration=${Date.now() - start}ms`);
       return NextResponse.json({
         success: true,
         jobId: job.id,
@@ -126,9 +127,7 @@ export async function POST(request: NextRequest) {
           // Store generated images in a separate field (not merging with uploaded images)
           // job.images = uploaded images (refs)
           // updateData.results = full output with generated URLs
-          console.log(`Job ${jobId} completed with ${generatedUrls.length} generated images`);
-          const uploadedCount = Array.isArray(job.images) ? job.images.length : 0;
-          console.log(`Uploaded images: ${uploadedCount}, Generated images: ${generatedUrls.length}`);
+          console.log(`${LOG} jobId=${jobId} completed generated=${generatedUrls.length} uploaded=${Array.isArray(job.images) ? job.images.length : 0}`);
         }
       }
     }
@@ -136,22 +135,26 @@ export async function POST(request: NextRequest) {
     if (status === "FAILED" && error) {
       const errMsg = typeof error === "string" ? error : JSON.stringify(error);
       updateData.error = truncateError(errMsg);
+      console.warn(`${LOG} jobId=${jobId} FAILED error=${truncateError(errMsg, 200)}`);
     }
 
+    console.log(`${LOG} update jobId=${jobId} status=${updateData.status}`);
     await prisma.job.update({
       where: { id: job.id },
       data: updateData,
     });
 
+    console.log(`${LOG} success jobId=${job.id} status=${updateData.status} duration=${Date.now() - start}ms`);
     return NextResponse.json({
       success: true,
       jobId: job.id,
       status: updateData.status,
     });
   } catch (error: any) {
-    console.error("Webhook error:", error);
+    console.error(`${LOG} error duration=${Date.now() - start}ms`, error?.message ?? String(error));
+    console.error(`${LOG} stack:`, error?.stack);
     return NextResponse.json(
-      { error: error.message },
+      { error: error?.message ?? "Webhook handler error" },
       { status: 500 }
     );
   }

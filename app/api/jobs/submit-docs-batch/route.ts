@@ -146,6 +146,8 @@ export async function POST(request: NextRequest) {
       resolution: parsed.resolution,
     };
 
+    const prompts = Array.isArray(parsed.prompts) && parsed.prompts.length > 0 ? parsed.prompts : [parsed.prompt];
+
     await prisma.job.create({
       data: {
         id: jobId,
@@ -153,7 +155,7 @@ export async function POST(request: NextRequest) {
         mode: "docs_automatic",
         status: "queued",
         images: imageUrls,
-        prompts: [parsed.prompt],
+        prompts,
         config,
       },
     });
@@ -166,7 +168,7 @@ export async function POST(request: NextRequest) {
       groupId,
       jobId,
       folder: folderForWorker,
-      prompts: [parsed.prompt],
+      prompts,
       prompt_template: parsed.prompt,
       config,
       model: model || config.model,

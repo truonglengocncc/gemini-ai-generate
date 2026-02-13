@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import { expandPromptTemplate } from "@/lib/promptExpand";
 
 type Group = { id: string; name: string; jobCount?: number };
 
@@ -16,38 +17,6 @@ const TEXT_MODELS = [
     label: "Gemini 2.5 Flash Image (Fast option)",
   },
 ];
-
-function expandPromptTemplate(template: string) {
-  if (!template) return [] as string[];
-  const regex = /\{([^{}]+)\}/g;
-  const segments: string[] = [];
-  const variables: string[][] = [];
-  let last = 0;
-  let match: RegExpExecArray | null;
-  while ((match = regex.exec(template)) !== null) {
-    segments.push(template.slice(last, match.index));
-    const opts = match[1]
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
-    variables.push(opts.length ? opts : [""]);
-    last = match.index + match[0].length;
-  }
-  segments.push(template.slice(last));
-  if (variables.length === 0) return [template];
-  const results: string[] = [];
-  const build = (idx: number, current: string) => {
-    if (idx === variables.length) {
-      results.push(current + segments[idx]);
-      return;
-    }
-    for (const opt of variables[idx]) {
-      build(idx + 1, current + segments[idx] + opt);
-    }
-  };
-  build(0, "");
-  return results;
-}
 
 export default function TextImagePage() {
   const router = useRouter();
@@ -260,8 +229,11 @@ export default function TextImagePage() {
               </div>
               <div className="mt-2 flex items-center justify-between text-[11px] text-zinc-500 dark:text-zinc-400">
                 <span>
-                  Expanded prompts:{" "}
-                  <span className="font-semibold text-zinc-800 dark:text-zinc-100">{expandedPrompts.length}</span>
+                  {prompt.length > 0 && (
+                    <>
+                      {prompt.length} characters · {expandedPrompts.length} prompt{expandedPrompts.length !== 1 ? "s" : ""}
+                    </>
+                  )}
                 </span>
                 <span className="hidden md:inline">
                   Example: <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] dark:bg-zinc-800">
@@ -269,6 +241,17 @@ export default function TextImagePage() {
                   </code>
                 </span>
               </div>
+              {expandedPrompts.length > 1 && (
+                <div className="mt-3 text-xs text-purple-700 dark:text-purple-300 bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 rounded-lg p-3">
+                  <p className="font-medium">Detected {expandedPrompts.length} prompt variants from braces. They will be assigned in order (round-robin), not multiplied.</p>
+                  <ul className="list-disc ml-4 mt-2 space-y-1">
+                    {expandedPrompts.slice(0, 3).map((p, i) => (
+                      <li key={i} className="font-mono text-[11px] break-words">{p}</li>
+                    ))}
+                    {expandedPrompts.length > 3 && <li className="italic">...and {expandedPrompts.length - 3} more</li>}
+                  </ul>
+                </div>
+              )}
             </div>
 
             <div className="space-y-4">
