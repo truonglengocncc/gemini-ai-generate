@@ -49,7 +49,7 @@ export default function JobDetailPage() {
   };
 
   const checkBatchStatus = async () => {
-    if (!job || job.mode !== "automatic" || job.status !== "batch_submitted") {
+    if (!job || (job.mode !== "automatic" && job.mode !== "docs_automatic") || job.status !== "batch_submitted") {
       return;
     }
 
@@ -117,7 +117,7 @@ export default function JobDetailPage() {
     }
   };
 
-  const isAutomaticMode = job?.mode === "automatic";
+  const isAutomaticMode = job?.mode === "automatic" || job?.mode === "docs_automatic";
   const canFetchResults = isAutomaticMode && Array.isArray(job?.config?.batch_job_names) && job.config.batch_job_names.length > 0;
   const canRetrySavedFiles = Array.isArray(job?.config?.batch_src_files) && job.config.batch_src_files.length > 0;
   const canRetryFromStart = job?.mode === "automatic" && !!(job?.config?.folder || (job?.images && job.images.length > 0));
@@ -676,7 +676,7 @@ export default function JobDetailPage() {
           </div>
         )}
 
-        {job.status === "batch_submitted" && job.mode === "automatic" && (
+        {job.status === "batch_submitted" && (job.mode === "automatic" || job.mode === "docs_automatic") && (
           <div className="bg-purple-50 dark:bg-purple-900/20 p-6 rounded-lg">
             <p className="text-purple-800 dark:text-purple-300 mb-2">
               Batch job has been submitted to Gemini. It may take some time to complete.

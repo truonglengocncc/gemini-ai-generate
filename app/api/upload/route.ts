@@ -116,8 +116,8 @@ export async function POST(request: NextRequest) {
       const pathPrefix = (process.env.GCS_PATH_PREFIX || "gemini-generate").replace(/\/+$/, "");
 
       if (useGcs) {
-        // Upload to GCS at {jobId}/upload path
-        const blobPath = `${pathPrefix}/${jobId}/upload/${filename}`;
+        // Upload to GCS in same folder as job (uploads and generated images together)
+        const blobPath = `${pathPrefix}/${jobId}/${filename}`;
         const contentType = file.type || "image/jpeg";
         const url = await uploadToGcs(
           gcsClient!,

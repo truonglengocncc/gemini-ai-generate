@@ -7,9 +7,9 @@ export default function AutomaticPage() {
   const router = useRouter();
   const [files, setFiles] = useState<File[]>([]);
   const [prompt, setPrompt] = useState("");
-  const [numVariations, setNumVariations] = useState(4);
+  const [numVariations, setNumVariations] = useState(1);
   const [model, setModel] = useState("gemini-3-pro-image-preview");
-  const [resolution, setResolution] = useState("1K");
+  const [resolution, setResolution] = useState("2K");
   const [aspectRatios, setAspectRatios] = useState<string[]>(["1:1"]);
   const [promptCombos, setPromptCombos] = useState(0);
   const [expandedPrompts, setExpandedPrompts] = useState<string[]>([]);
@@ -158,7 +158,7 @@ export default function AutomaticPage() {
         body: JSON.stringify({
           groupId: currentGroupId,
           jobId: generatedJobId,
-          folder: `${generatedJobId}/upload`,
+          folder: generatedJobId,
           prompts: expandedPrompts,
           prompt_template: prompt,
           model: model,
@@ -180,9 +180,9 @@ export default function AutomaticPage() {
       // Clear form state
       setFiles([]);
       setPrompt("");
-      setNumVariations(4);
+      setNumVariations(1);
       setModel("gemini-3-pro-image-preview");
-      setResolution("1K");
+      setResolution("2K");
       setAspectRatios(["1:1"]);
       setPromptCombos(0);
       setExpandedPrompts([]);
@@ -441,8 +441,8 @@ export default function AutomaticPage() {
                       className="w-full p-2 border-2 border-gray-200 dark:border-zinc-700 rounded-lg bg-gray-50 dark:bg-zinc-800/50 focus:border-orange-500 dark:focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-200 dark:focus:ring-orange-900/50 transition-all text-sm"
                       disabled={loading}
                     >
-                      <option value="1K">1K (Default)</option>
-                      <option value="2K">2K</option>
+                      <option value="1K">1K</option>
+                      <option value="2K">2K (Default)</option>
                       <option value="4K">4K</option>
                     </select>
                   </div>

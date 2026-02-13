@@ -378,6 +378,8 @@ async function submitToRunPod(jobId: string, payload: any) {
   const webhookUrl = process.env.WEBHOOK_URL || process.env.NEXT_PUBLIC_WEBHOOK_URL;
   const body = { input: payload, ...(webhookUrl ? { webhook: webhookUrl } : {}) };
 
+  console.log("[worker payload] submit-text-image", JSON.stringify(body));
+
   const response = await fetch(runpodEndpoint, {
     method: "POST",
     headers: {

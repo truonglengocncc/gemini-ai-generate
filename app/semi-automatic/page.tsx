@@ -24,7 +24,7 @@ export default function SemiAutomaticPage() {
   const [refImages, setRefImages] = useState<File[]>([]);
   const [prompts, setPrompts] = useState<Prompt[]>([{ text: "", countPerRef: 1 }]);
   const [model, setModel] = useState("gemini-3-pro-image-preview");
-  const [resolution, setResolution] = useState("1K");
+  const [resolution, setResolution] = useState("2K");
   const [aspectRatio, setAspectRatio] = useState("1:1");
   const [loading, setLoading] = useState(false);
   const [queue, setQueue] = useState<any[]>([]);
@@ -235,7 +235,7 @@ useEffect(() => {
           mode: "semi-automatic",
           groupId: groupIdToUse,
           jobId: generatedJobId,
-          folder: `${generatedJobId}/upload`,
+          folder: generatedJobId,
           prompts: promptTexts,
           model: model,
           config: {
@@ -252,7 +252,7 @@ useEffect(() => {
       setRefImages([]);
       setPrompts([{ text: "", countPerRef: 1 }]);
       setModel("gemini-3-pro-image-preview"); // Reset model to default
-      setResolution("1K"); // Reset resolution to default
+      setResolution("2K"); // Reset resolution to default
       setAspectRatio("1:1"); // Reset aspect ratio to default
     } catch (error) {
       console.error("Failed to submit jobs:", error);
@@ -389,8 +389,8 @@ useEffect(() => {
                         className="w-full p-2 border-2 border-gray-200 dark:border-zinc-700 rounded-lg bg-gray-50 dark:bg-zinc-800/50 focus:border-orange-500 dark:focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-200 dark:focus:ring-orange-900/50 transition-all text-sm"
                         disabled={loading}
                       >
-                        <option value="1K">1K (Default)</option>
-                        <option value="2K">2K</option>
+                        <option value="1K">1K</option>
+                        <option value="2K">2K (Default)</option>
                         <option value="4K">4K</option>
                       </select>
                     </div>

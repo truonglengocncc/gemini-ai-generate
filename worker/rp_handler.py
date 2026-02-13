@@ -27,10 +27,25 @@ def ensure_tmp_dir() -> str:
 #                               Handler Logic                                  #
 # ---------------------------------------------------------------------------- #
 
+def _sanitize_for_log(obj, _depth=0):
+    """Pass-through for logging payload (no redaction)."""
+    if _depth > 10:
+        return "[max depth]"
+    if isinstance(obj, dict):
+        return {k: _sanitize_for_log(v, _depth + 1) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_for_log(x, _depth + 1) for x in obj]
+    return obj
+
+
 async def handler(job):
     print(f"Worker Start")
     input_data = job['input']
-    
+    try:
+        import json
+        print("[worker payload] received input:", json.dumps(_sanitize_for_log(input_data), indent=2, default=str))
+    except Exception:
+        print("[worker payload] received input (log serialization failed)")
     mode = input_data.get('mode')
     
     if mode == 'automatic':
@@ -39,6 +54,10 @@ async def handler(job):
         return await handle_semi_automatic_mode(input_data)
     elif mode == 'automatic_batch':
         return await handle_automatic_batch_mode(input_data)
+    elif mode == 'docs_automatic':
+        return await handle_automatic_batch_mode(input_data)
+    elif mode == 'docs_semi_automatic':
+        return await handle_docs_semi_automatic_mode(input_data)
     elif mode == 'fetch_results':
         return await handle_fetch_results_mode(input_data)
     elif mode == 'cleanup_group':
@@ -47,7 +66,8 @@ async def handler(job):
         return await handle_text_image_mode(input_data)
     else:
         return {
-            "error": f"Invalid mode: {mode}"
+            "error": f"Invalid mode: {mode}",
+            "refresh_worker": True,
         }
 
 # ---------------------------------------------------------------------------- #
@@ -79,7 +99,7 @@ async def handle_automatic_batch_mode(input_data: Dict[str, Any]) -> Dict[str, A
 
     api_key = input_data.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY")
     if not api_key:
-        return {"status": "failed", "error": "Missing GEMINI_API_KEY"}
+        return {"status": "failed", "error": "Missing GEMINI_API_KEY", "refresh_worker": True}
 
     # Fast path: reuse already-uploaded JSONL files (retry without needing folder/images)
     if preuploaded_jsonl_files:
@@ -107,7 +127,7 @@ async def handle_automatic_batch_mode(input_data: Dict[str, Any]) -> Dict[str, A
     # Expand prompt variables if template provided
     expanded_prompts = expand_prompt_template(prompt_template) if prompt_template else (prompts if isinstance(prompts, list) else [prompts])
     if not expanded_prompts:
-        return {"status": "failed", "error": "Prompt is required"}
+        return {"status": "failed", "error": "Prompt is required", "refresh_worker": True}
 
     # Load inline images (prefer inline_data passed from client; else download from GCS using gcs_files)
     inline_images = sorted(inline_data, key=lambda x: x.get("index", 0))
@@ -125,11 +145,11 @@ async def handle_automatic_batch_mode(input_data: Dict[str, Any]) -> Dict[str, A
                 inline_images = await load_inline_images_from_urls(urls)
                 print(f"[automatic_batch] loaded {len(inline_images)} images from folder={folder}")
             except Exception as e:
-                return {"status": "failed", "error": f"Failed to load images from folder: {e}"}
+                return {"status": "failed", "error": f"Failed to load images from folder: {e}", "refresh_worker": True}
         else:
-            return {"status": "failed", "error": "No images provided"}
+            return {"status": "failed", "error": "No images provided", "refresh_worker": True}
     if not inline_images:
-        return {"status": "failed", "error": "No images found to batch"}
+        return {"status": "failed", "error": "No images found to batch", "refresh_worker": True}
 
     client = genai.Client(api_key=api_key)
 
@@ -268,6 +288,7 @@ async def handle_automatic_batch_mode(input_data: Dict[str, Any]) -> Dict[str, A
                         "status": "failed",
                         "error": f"Single request too large for JSONL chunking (line_bytes={line_size} max_bytes={MAX_JSONL_BYTES}). "
                                  f"Image index={img.get('index', 0)}. Please compress/resize or switch to file references.",
+                        "refresh_worker": True,
                     }
                 if (current_size + line_size > MAX_JSONL_BYTES) or (request_count >= MAX_REQUESTS):
                     flush_chunk(len(batch_names))
@@ -325,7 +346,8 @@ async def handle_automatic_mode(input_data: Dict[str, Any]) -> Dict[str, Any]:
             "status": "failed",
             "error": "Missing or empty 'prompt'/'prompts' in input for automatic mode. Please provide a valid prompt.",
             "results": [],
-            "total": 0
+            "total": 0,
+            "refresh_worker": True,
         }
     
     # Đảm bảo prompt là string và hợp lệ
@@ -335,7 +357,8 @@ async def handle_automatic_mode(input_data: Dict[str, Any]) -> Dict[str, Any]:
             "status": "failed",
             "error": f"Prompt too short (minimum 3 characters). Got: '{prompt}'",
             "results": [],
-            "total": 0
+            "total": 0,
+            "refresh_worker": True,
         }
 
     config = input_data.get("config", {})
@@ -346,7 +369,7 @@ async def handle_automatic_mode(input_data: Dict[str, Any]) -> Dict[str, Any]:
     job_id = input_data.get("job_id", "")
     
     if not folder_path or not gcs_config:
-        return {"status": "failed", "error": "Missing folder or GCS config", "results": [], "total": 0}
+        return {"status": "failed", "error": "Missing folder or GCS config", "results": [], "total": 0, "refresh_worker": True}
     
     gcs_client = initialize_gcs_client(gcs_config)
     bucket_name = gcs_config.get("bucket_name")
@@ -356,11 +379,11 @@ async def handle_automatic_mode(input_data: Dict[str, Any]) -> Dict[str, Any]:
     print(f"[Automatic] Found {len(image_urls)} files, using single prompt: {prompt[:80]}...")
     
     if not image_urls:
-        return {"status": "failed", "error": "No images found", "results": [], "total": 0}
+        return {"status": "failed", "error": "No images found", "results": [], "total": 0, "refresh_worker": True}
     
     api_key = input_data.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY")
     if not api_key:
-        return {"status": "failed", "error": "Missing GEMINI_API_KEY", "results": [], "total": 0}
+        return {"status": "failed", "error": "Missing GEMINI_API_KEY", "results": [], "total": 0, "refresh_worker": True}
     
     # Get model from input_data first, then from config, then default
     model_name = input_data.get("model") or config.get("model") or "gemini-3-pro-image-preview"
@@ -377,13 +400,13 @@ async def handle_automatic_mode(input_data: Dict[str, Any]) -> Dict[str, Any]:
                 if gcs_client and gcs_config:
                     timestamp = int(time.time() * 1000)
                     unique_id = f"{timestamp}_{idx}_{variation}"
-                    path_prefix = f"{job_id}/processed" if job_id else "processed"
-                    
+                    # Same folder as uploads: job_id/xxx_gemini.jpg
+                    rel_path = f"{job_id}/{unique_id}_gemini.jpg" if job_id else f"processed/{unique_id}_gemini.jpg"
                     gcs_url = await upload_to_gcs_async(
                         gcs_client,
                         generated_image,
                         gcs_config,
-                        f"{path_prefix}/automatic/{idx}/variation_{variation}_{unique_id}.jpg"
+                        rel_path,
                     )
                     image_results.append({
                         "original_index": idx,
@@ -429,7 +452,8 @@ async def handle_semi_automatic_mode(input_data: Dict[str, Any]) -> Dict[str, An
             "status": "failed",
             "error": "Missing or empty 'prompts' (list) in input for semi-automatic mode. Please provide prompts array.",
             "results": [],
-            "total": 0
+            "total": 0,
+            "refresh_worker": True,
         }
     
     config = input_data.get("config", {})
@@ -440,7 +464,7 @@ async def handle_semi_automatic_mode(input_data: Dict[str, Any]) -> Dict[str, An
     job_id = input_data.get("job_id", "")
     
     if not folder_path or not gcs_config:
-        return {"status": "failed", "error": "Missing folder or GCS config", "results": [], "total": 0}
+        return {"status": "failed", "error": "Missing folder or GCS config", "results": [], "total": 0, "refresh_worker": True}
     
     gcs_client = initialize_gcs_client(gcs_config)
     bucket_name = gcs_config.get("bucket_name")
@@ -450,11 +474,11 @@ async def handle_semi_automatic_mode(input_data: Dict[str, Any]) -> Dict[str, An
     print(f"[Semi-Auto] Found {len(image_urls)} files, using {len(prompts)} prompts")
     
     if not image_urls:
-        return {"status": "failed", "error": "No images found", "results": [], "total": 0}
+        return {"status": "failed", "error": "No images found", "results": [], "total": 0, "refresh_worker": True}
     
     api_key = input_data.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY")
     if not api_key:
-        return {"status": "failed", "error": "Missing GEMINI_API_KEY", "results": [], "total": 0}
+        return {"status": "failed", "error": "Missing GEMINI_API_KEY", "results": [], "total": 0, "refresh_worker": True}
     
     # Get model from input_data first, then from config, then default
     model_name = input_data.get("model") or config.get("model") or "gemini-3-pro-image-preview"
@@ -480,14 +504,24 @@ async def handle_semi_automatic_mode(input_data: Dict[str, Any]) -> Dict[str, An
                         if gcs_client and gcs_config:
                             timestamp = int(time.time() * 1000)
                             unique_id = f"{timestamp}_{img_idx}_{prompt_idx}_{gen_idx}"
-                            path_prefix = f"{job_id}/processed" if job_id else "processed"
-                            
-                            gcs_url = await upload_to_gcs_async(
-                                gcs_client,
-                                generated_image,
-                                gcs_config,
-                                f"{path_prefix}/semi-auto/{img_idx}/prompt_{prompt_idx}/gen_{gen_idx}_{unique_id}.jpg"
-                            )
+                            output_gcs_prefix = config.get("output_gcs_prefix")
+                            if output_gcs_prefix:
+                                # Docs Semi Automatic: save to .../gemini/ folder (same level as input)
+                                full_path = f"{output_gcs_prefix.rstrip('/')}/{img_idx}/prompt_{prompt_idx}/gen_{gen_idx}_{unique_id}_gemini.jpg"
+                                bucket = gcs_client.bucket(gcs_config.get("bucket_name"))
+                                blob = bucket.blob(full_path)
+                                blob.upload_from_string(generated_image, content_type="image/jpeg")
+                                cdn = gcs_config.get("cdn_url")
+                                gcs_url = f"{cdn.rstrip('/')}/{full_path}" if cdn else f"https://storage.googleapis.com/{gcs_config.get('bucket_name')}/{full_path}"
+                            else:
+                                # Same folder as uploads: job_id/xxx_gemini.jpg
+                                rel_path = f"{job_id}/semi_{unique_id}_gemini.jpg" if job_id else f"processed/semi_{unique_id}_gemini.jpg"
+                                gcs_url = await upload_to_gcs_async(
+                                    gcs_client,
+                                    generated_image,
+                                    gcs_config,
+                                    rel_path,
+                                )
                             return {
                                 "image_index": img_idx,
                                 "prompt_index": prompt_idx,
@@ -516,6 +550,100 @@ async def handle_semi_automatic_mode(input_data: Dict[str, Any]) -> Dict[str, An
     results_list = await asyncio.gather(*tasks)
     results = [item for sublist in results_list for item in sublist]
     
+    return {
+        "status": "completed",
+        "results": results,
+        "total_generated": len([r for r in results if "gcs_url" in r or "image" in r]),
+        "refresh_worker": True,
+    }
+
+async def handle_docs_semi_automatic_mode(input_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Same generation as semi-automatic, but images are saved only under output_gcs_prefix
+    with flat filenames: .../gemini/gemini-gen_{img_idx}_{ts}_{prompt_idx}_{gen_idx}_gemini.jpg
+    No job_id/processed/semi-auto subfolders.
+    """
+    folder_path = input_data.get("folder")
+    prompts = input_data.get("prompts", [])
+    config = input_data.get("config", {}) or {}
+    output_gcs_prefix = config.get("output_gcs_prefix")
+    if not output_gcs_prefix:
+        return {
+            "status": "failed",
+            "error": "Docs Semi Automatic requires config.output_gcs_prefix (e.g. gemini-generate/test_docs_generate/gemini)",
+            "results": [],
+            "total": 0,
+            "refresh_worker": True,
+        }
+    images_per_prompt = config.get("images_per_prompt", {})
+    resolution = config.get("resolution")
+    aspect_ratio = config.get("aspect_ratio")
+    gcs_config = input_data.get("gcs_config")
+    if not folder_path or not gcs_config:
+        return {"status": "failed", "error": "Missing folder or GCS config", "results": [], "total": 0, "refresh_worker": True}
+
+    gcs_client = initialize_gcs_client(gcs_config)
+    bucket_name = gcs_config.get("bucket_name")
+    print(f"[Docs-Semi] Listing files from: {folder_path}, output prefix: {output_gcs_prefix}")
+    image_urls = await list_files_from_gcs_folder(gcs_client, bucket_name, folder_path, gcs_config)
+    print(f"[Docs-Semi] Found {len(image_urls)} files, {len(prompts)} prompts")
+    if not image_urls:
+        return {"status": "failed", "error": "No images found", "results": [], "total": 0, "refresh_worker": True}
+
+    api_key = input_data.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        return {"status": "failed", "error": "Missing GEMINI_API_KEY", "results": [], "total": 0, "refresh_worker": True}
+    model_name = input_data.get("model") or config.get("model") or "gemini-3-pro-image-preview"
+
+    bucket = gcs_client.bucket(bucket_name)
+    prefix_flat = output_gcs_prefix.rstrip("/")
+
+    async def process_image_prompt(img_idx: int, image_url: str):
+        try:
+            image_bytes = await download_image(image_url)
+            image_prompts = prompts if isinstance(prompts, list) else prompts.get(str(img_idx), [])
+            if isinstance(image_prompts, str):
+                image_prompts = [image_prompts]
+            image_results = []
+            for prompt_idx, prompt in enumerate(image_prompts):
+                num_images = images_per_prompt.get(f"{img_idx}_{prompt_idx}", 1)
+
+                async def generate_for_prompt(gen_idx: int):
+                    try:
+                        generated_image = await generate_image_async(
+                            image_bytes, prompt, api_key, model_name, resolution, aspect_ratio
+                        )
+                        timestamp = int(time.time() * 1000)
+                        fname = f"gemini-gen_{img_idx}_{timestamp}_{prompt_idx}_{gen_idx}_gemini.jpg"
+                        full_path = f"{prefix_flat}/{fname}"
+                        blob = bucket.blob(full_path)
+                        blob.upload_from_string(generated_image, content_type="image/jpeg")
+                        cdn = gcs_config.get("cdn_url")
+                        gcs_url = (
+                            f"{cdn.rstrip('/')}/{full_path}"
+                            if cdn
+                            else f"https://storage.googleapis.com/{bucket_name}/{full_path}"
+                        )
+                        return {
+                            "image_index": img_idx,
+                            "prompt_index": prompt_idx,
+                            "generation_index": gen_idx,
+                            "prompt": prompt,
+                            "gcs_url": gcs_url,
+                        }
+                    except Exception as e:
+                        return {"image_index": img_idx, "error": str(e)}
+
+                gen_tasks = [generate_for_prompt(gen_idx) for gen_idx in range(num_images)]
+                prompt_results = await asyncio.gather(*gen_tasks)
+                image_results.extend(prompt_results)
+            return image_results
+        except Exception as e:
+            return [{"image_index": img_idx, "error": str(e)}]
+
+    tasks = [process_image_prompt(img_idx, url) for img_idx, url in enumerate(image_urls)]
+    results_list = await asyncio.gather(*tasks)
+    results = [item for sublist in results_list for item in sublist]
     return {
         "status": "completed",
         "results": results,
@@ -553,9 +681,9 @@ async def handle_text_image_mode(input_data: Dict[str, Any]) -> Dict[str, Any]:
     api_key = input_data.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY")
 
     if not api_key:
-        return {"status": "failed", "error": "Missing GEMINI_API_KEY"}
+        return {"status": "failed", "error": "Missing GEMINI_API_KEY", "refresh_worker": True}
     if not gcs_config:
-        return {"status": "failed", "error": "Missing GCS config for upload"}
+        return {"status": "failed", "error": "Missing GCS config for upload", "refresh_worker": True}
 
     prompt_list: List[str] = []
     if isinstance(prompts, list):
@@ -566,12 +694,12 @@ async def handle_text_image_mode(input_data: Dict[str, Any]) -> Dict[str, Any]:
         prompt_list = [p for p in expand_prompt_template(str(prompt_template)) if p.strip()]
 
     if not prompt_list:
-        return {"status": "failed", "error": "No prompts provided for text-image mode"}
+        return {"status": "failed", "error": "No prompts provided for text-image mode", "refresh_worker": True}
 
     try:
         gcs_client = initialize_gcs_client(gcs_config)
     except Exception as e:
-        return {"status": "failed", "error": f"Failed to init GCS client: {e}"}
+        return {"status": "failed", "error": f"Failed to init GCS client: {e}", "refresh_worker": True}
 
     total_generated = 0
     results: List[Dict[str, Any]] = []
@@ -858,6 +986,10 @@ def _list_files_from_gcs_folder_sync(gcs_client, bucket_name, folder_path, gcs_c
             continue
         if not any(blob.name.lower().endswith(ext) for ext in ['.jpg', '.jpeg', '.png', '.webp']):
             continue
+        # Exclude generated images (labeled _gemini) so only user uploads are used as input
+        fname = blob.name.split("/")[-1]
+        if "_gemini" in fname:
+            continue
 
         # Public URL first (objects are uploaded public). Avoid signed URLs to prevent 400.
         if cdn_url:
@@ -883,16 +1015,18 @@ async def upload_to_gcs_async(gcs_client, image_bytes, gcs_config, filename, con
     return await loop.run_in_executor(None, upload_to_gcs_sync, gcs_client, gcs_config.get("bucket_name"), filename, image_bytes, gcs_config, content_type)
 
 def upload_to_gcs_sync(gcs_client, bucket_name, blob_path, image_bytes, gcs_config=None, content_type: str = "image/jpeg") -> str:
-    def prepend_gemini(path: str) -> str:
+    def label_gemini(path: str) -> str:
+        """Label generated images: use _gemini in filename; avoid double prefix if already present."""
         if not path:
             return path
         parts = path.rsplit("/", 1)
         dir_part = parts[0] if len(parts) == 2 else ""
         fname = parts[-1]
-        if fname.startswith("gemini-") or fname.startswith("gemini_"):
-            new_fname = fname
-        else:
-            new_fname = f"gemini-{fname}"
+        # Already labeled with _gemini (e.g. xxx_gemini.jpg) or gemini- prefix: keep as is
+        if "_gemini" in fname or fname.startswith("gemini-") or fname.startswith("gemini_"):
+            return path
+        # Label generated image with _gemini (suffix before extension)
+        new_fname = f"gemini-{fname}"
         return f"{dir_part}/{new_fname}" if dir_part else new_fname
 
     # Prepend path prefix if provided
@@ -901,8 +1035,8 @@ def upload_to_gcs_sync(gcs_client, bucket_name, blob_path, image_bytes, gcs_conf
         if prefix:
             blob_path = f"{prefix.rstrip('/')}/{blob_path.lstrip('/')}"
 
-    # Ensure filename uniqueness by prepending 'gemini-'
-    blob_path = prepend_gemini(blob_path)
+    # Label generated images (prepend gemini- only when filename does not already have _gemini)
+    blob_path = label_gemini(blob_path)
 
     bucket = gcs_client.bucket(bucket_name)
     blob = bucket.blob(blob_path)
@@ -1178,6 +1312,10 @@ async def handle_fetch_results_mode(input_data: Dict[str, Any]) -> Dict[str, Any
     Worker downloads Gemini Batch outputs and uploads results to GCS.
     Returns results in webhook output to avoid Next.js timeouts.
     """
+    try:
+        print("[fetch_results] payload:", json.dumps(_sanitize_for_log(input_data), indent=2, default=str))
+    except Exception:
+        print("[fetch_results] payload (log serialization failed)")
     job_id = input_data.get("job_id") or input_data.get("jobId")
     batch_names = input_data.get("batch_job_names") or input_data.get("batch_names") or []
     api_key = input_data.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY")
@@ -1185,9 +1323,9 @@ async def handle_fetch_results_mode(input_data: Dict[str, Any]) -> Dict[str, Any
     save_response_jsonl_to_gcs = input_data.get("save_response_jsonl_to_gcs", True)
 
     if not job_id or not batch_names:
-        return {"status": "failed", "error": "Missing job_id or batch_job_names"}
+        return {"status": "failed", "error": "Missing job_id or batch_job_names", "refresh_worker": True}
     if not api_key:
-        return {"status": "failed", "error": "Missing GEMINI_API_KEY"}
+        return {"status": "failed", "error": "Missing GEMINI_API_KEY", "refresh_worker": True}
 
     start_time = time.time()
     results = []
@@ -1270,11 +1408,12 @@ async def handle_fetch_results_mode(input_data: Dict[str, Any]) -> Dict[str, Any
                     pass
 
     # Upload to GCS if configured
+    output_gcs_prefix = input_data.get("output_gcs_prefix")  # Docs Automatic: save to .../gemini/ instead of job_id/processed/
     if gcs_config and results:
         gcs_client = initialize_gcs_client(gcs_config)
         uploaded = []
         bucket = gcs_client.bucket(gcs_config.get("bucket_name"))
-        print(f"[fetch_results] uploading {len(results)} images to GCS")
+        print(f"[fetch_results] uploading {len(results)} images to GCS" + (f" (output_gcs_prefix={output_gcs_prefix})" if output_gcs_prefix else ""))
         for idx, img in enumerate(results):
             if not img.get("base64"):
                 continue
@@ -1288,30 +1427,30 @@ async def handle_fetch_results_mode(input_data: Dict[str, Any]) -> Dict[str, Any
                     filename = f"result_{idx}.png"
                 else:
                     filename = f"p{pidx}_img{orig}_var{var}.png" if pidx is not None else f"img{orig}_var{var}.png"
-                path = f"{job_id}/processed/batch/{ratio_slug}/{filename}"
-
-                # Skip re-upload if already exists, but still return URL.
-                normalized_path = path
-                prefix = gcs_config.get("path_prefix") or gcs_config.get("path_prefixes") or gcs_config.get("root_prefix")
-                if prefix:
-                    normalized_path = f"{prefix.rstrip('/')}/{normalized_path.lstrip('/')}"
-                # apply gemini- prefix to filename segment (same as upload_to_gcs_sync)
-                parts = normalized_path.rsplit("/", 1)
-                if len(parts) == 2:
-                    d, f = parts
-                    if not (f.startswith("gemini-") or f.startswith("gemini_")):
-                        normalized_path = f"{d}/gemini-{f}"
-                else:
-                    if not (normalized_path.startswith("gemini-") or normalized_path.startswith("gemini_")):
-                        normalized_path = f"gemini-{normalized_path}"
-                blob = bucket.blob(normalized_path)
-                if blob.exists():
-                    cdn = gcs_config.get("cdn_url")
-                    if cdn:
-                        gcs_url = f"{cdn.rstrip('/')}/{normalized_path}"
+                # Docs Automatic: use output_gcs_prefix (e.g. gemini-generate/test_docs_generate/gemini) as full path prefix
+                if output_gcs_prefix:
+                    # Docs: save to .../gemini/ with _gemini label
+                    base, ext = filename.rsplit(".", 1) if "." in filename else (filename, "png")
+                    fname = f"{base}_gemini.{ext}" if "_gemini" not in base else filename
+                    normalized_path = f"{output_gcs_prefix.rstrip('/')}/{fname}"
+                    blob = bucket.blob(normalized_path)
+                    if blob.exists():
+                        cdn = gcs_config.get("cdn_url")
+                        gcs_url = f"{cdn.rstrip('/')}/{normalized_path}" if cdn else f"https://storage.googleapis.com/{gcs_config.get('bucket_name')}/{normalized_path}"
                     else:
-                        gcs_url = f"https://storage.googleapis.com/{gcs_config.get('bucket_name')}/{normalized_path}"
+                        blob.upload_from_string(buffer, content_type=img.get("mimeType") or "image/png")
+                        gcs_url = f"{gcs_config.get('cdn_url', '').rstrip('/')}/{normalized_path}" if gcs_config.get("cdn_url") else f"https://storage.googleapis.com/{gcs_config.get('bucket_name')}/{normalized_path}"
+                    uploaded.append({
+                        "gcs_url": gcs_url,
+                        "variation": img.get("variation"),
+                        "original_index": img.get("original_index"),
+                        "ratio": img.get("ratio"),
+                    })
                 else:
+                    # Automatic batch: same folder as uploads (job_id/), label _gemini
+                    base, ext = filename.rsplit(".", 1) if "." in filename else (filename, "png")
+                    fname_gemini = f"{base}_gemini.{ext}" if "_gemini" not in base else filename
+                    path = f"{job_id}/{fname_gemini}"
                     gcs_url = await upload_to_gcs_async(
                         gcs_client,
                         buffer,
@@ -1319,12 +1458,12 @@ async def handle_fetch_results_mode(input_data: Dict[str, Any]) -> Dict[str, Any
                         path,
                         content_type=img.get("mimeType") or "image/png",
                     )
-                uploaded.append({
-                    "gcs_url": gcs_url,
-                    "variation": img.get("variation"),
-                    "original_index": img.get("original_index"),
-                    "ratio": img.get("ratio"),
-                })
+                    uploaded.append({
+                        "gcs_url": gcs_url,
+                        "variation": img.get("variation"),
+                        "original_index": img.get("original_index"),
+                        "ratio": img.get("ratio"),
+                    })
                 if (idx + 1) % 10 == 0:
                     print(f"[fetch_results] uploaded {idx+1}/{len(results)}")
             except Exception as e:
@@ -1408,7 +1547,7 @@ async def handle_cleanup_group(input_data: Dict[str, Any]) -> Dict[str, Any]:
 
     if not group_id or not job_ids:
         print("[cleanup] missing group_id or job_ids, skipping")
-        return {"status": "skipped", "reason": "missing group_id or job_ids"}
+        return {"status": "skipped", "reason": "missing group_id or job_ids", "refresh_worker": True}
 
     deleted_gcs = 0
     deleted_files = 0
@@ -1448,6 +1587,7 @@ async def handle_cleanup_group(input_data: Dict[str, Any]) -> Dict[str, Any]:
                     return {
                         "status": "failed",
                         "error": "purge_gemini_all requested but ALLOW_GEMINI_PURGE_ALL is not enabled",
+                        "refresh_worker": True,
                     }
                 print("[cleanup] PURGE ALL GEMINI FILES + BATCHES requested (ALLOW_GEMINI_PURGE_ALL enabled)")
                 purged_files = 0
@@ -1486,6 +1626,7 @@ async def handle_cleanup_group(input_data: Dict[str, Any]) -> Dict[str, Any]:
                     "deleted_gcs": deleted_gcs,
                     "purged_gemini_files": purged_files,
                     "purged_gemini_batches": purged_batches,
+                    "refresh_worker": True,
                 }
 
             # Preferred: strict cleanup by explicit resource names (fast, avoids scanning).
@@ -1523,7 +1664,7 @@ async def handle_cleanup_group(input_data: Dict[str, Any]) -> Dict[str, Any]:
                 # No explicit lists provided -> no Gemini cleanup (avoid scanning whole project).
                 print("[cleanup] no batch/file lists provided; skipping Gemini cleanup")
         except Exception as e:
-            return {"status": "failed", "error": f"Gemini cleanup failed: {e}"}
+            return {"status": "failed", "error": f"Gemini cleanup failed: {e}", "refresh_worker": True}
 
     return {
         "status": "completed",
@@ -1532,6 +1673,7 @@ async def handle_cleanup_group(input_data: Dict[str, Any]) -> Dict[str, Any]:
         "matched_gemini_files": matched_files,
         "matched_batches": matched_batches,
         "deleted_batches": deleted_batches,
+        "refresh_worker": True,
     }
 
 if __name__ == "__main__":

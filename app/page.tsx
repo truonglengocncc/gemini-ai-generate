@@ -40,7 +40,7 @@ export default function Home() {
             <div className="text-4xl mb-4">🎨</div>
             <h2 className="text-2xl font-semibold mb-3">Semi-Automatic Mode</h2>
             <p className="text-zinc-600 dark:text-zinc-400 mb-4">
-              Controlled batch generation with Midjourney-like workflow. 
+              Controlled batch generation with Midjourney-like workflow.
               Multiple prompts, reference images, and organized groups.
             </p>
             <ul className="text-sm text-zinc-500 space-y-2">
@@ -48,6 +48,38 @@ export default function Home() {
               <li>✓ Multiple prompts per group</li>
               <li>✓ Batch processing (4 imgs/batch)</li>
               <li>✓ Queue management</li>
+            </ul>
+          </Link>
+
+          <Link
+            href="/docs-automatic"
+            className="bg-white dark:bg-zinc-900 p-8 rounded-xl border-2 border-zinc-200 dark:border-zinc-800 hover:border-teal-500 transition-all hover:shadow-lg"
+          >
+            <div className="text-4xl mb-4">📄</div>
+            <h2 className="text-2xl font-semibold mb-3">Docs Automatic Mode</h2>
+            <p className="text-zinc-600 dark:text-zinc-400 mb-4">
+              Load prompt, image count, ratio, and resolution from a docs file. Input images from GCS; results saved to a gemini folder at the same level.
+            </p>
+            <ul className="text-sm text-zinc-500 space-y-2">
+              <li>✓ Upload file docs (Prompt, Number of Images, Ratio, Variations, Resolution)</li>
+              <li>✓ Enter GCS folder path for images (e.g. .../midjourney)</li>
+              <li>✓ Results saved to .../gemini/</li>
+            </ul>
+          </Link>
+
+          <Link
+            href="/docs-semi-automatic"
+            className="bg-white dark:bg-zinc-900 p-8 rounded-xl border-2 border-zinc-200 dark:border-zinc-800 hover:border-purple-500 transition-all hover:shadow-lg"
+          >
+            <div className="text-4xl mb-4">📄</div>
+            <h2 className="text-2xl font-semibold mb-3">Docs Semi Automatic Mode</h2>
+            <p className="text-zinc-600 dark:text-zinc-400 mb-4">
+              Same as Semi-Automatic: config from docs, images from GCS. Generated images saved to the same GCS folder as the source images.
+            </p>
+            <ul className="text-sm text-zinc-500 space-y-2">
+              <li>✓ Docs link or file + GCS path</li>
+              <li>✓ Same generation logic as Semi-Automatic</li>
+              <li>✓ Output in same folder as input (no .../gemini/)</li>
             </ul>
           </Link>
 
