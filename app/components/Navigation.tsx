@@ -46,17 +46,6 @@ export default function Navigation() {
             </Link>
 
             <Link
-              href="/text-image"
-              className={`px-3 py-2 rounded-md text-sm font-medium transition-colors ${
-                isActive("/text-image")
-                  ? "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-200"
-                  : "text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800"
-              }`}
-            >
-              Text-to-Image
-            </Link>
-
-            <Link
               href="/semi-automatic"
               className={`px-3 py-2 rounded-md text-sm font-medium transition-colors ${
                 isActive("/semi-automatic")
@@ -65,6 +54,39 @@ export default function Navigation() {
               }`}
             >
               Semi-Automatic Mode
+            </Link>
+
+            <Link
+              href="/docs-automatic"
+              className={`px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                isActive("/docs-automatic")
+                  ? "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-200"
+                  : "text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+              }`}
+            >
+              Docs Automatic
+            </Link>
+
+            <Link
+              href="/docs-semi-automatic"
+              className={`px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                isActive("/docs-semi-automatic")
+                  ? "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-200"
+                  : "text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+              }`}
+            >
+              Docs Semi Automatic
+            </Link>
+
+            <Link
+              href="/text-image"
+              className={`px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                isActive("/text-image")
+                  ? "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-200"
+                  : "text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+              }`}
+            >
+              Text-to-Image
             </Link>
 
             <Link

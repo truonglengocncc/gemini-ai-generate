@@ -118,7 +118,7 @@ export default function JobsPage() {
   const retryFetch = async (jobId: string, mode: string, useSaved: boolean) => {
     try {
       const url =
-        mode === "automatic" ? "/api/jobs/submit-batch" : "/api/jobs/submit";
+        mode === "automatic" || mode === "docs_automatic" ? "/api/jobs/submit-batch" : "/api/jobs/submit";
       const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },

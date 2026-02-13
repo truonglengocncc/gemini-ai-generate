@@ -240,8 +240,7 @@ async function submitToRunPod(jobId: string, payload: any) {
   }
   
   console.log("=".repeat(80));
-  console.log(`[${new Date().toISOString()}] Sending payload to RunPod worker for job: ${jobId}`);
-  console.log("Payload prepared (details omitted for privacy).");
+  console.log(`[${new Date().toISOString()}] [worker payload] submit`, JSON.stringify(requestBody));
   console.log("=".repeat(80));
 
   try {

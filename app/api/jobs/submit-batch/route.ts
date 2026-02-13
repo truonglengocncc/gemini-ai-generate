@@ -268,8 +268,7 @@ async function submitToRunPodBatch(jobId: string, payload: any) {
   const requestBody: any = { input: payload };
   if (webhookUrl) requestBody.webhook = webhookUrl;
 
-  // Debug log payload size & summary (no secrets)
-  // Removed verbose payload logging (dev-only)
+  console.log("[worker payload] submit-batch", JSON.stringify(requestBody));
 
   const response = await fetch(runpodEndpoint, {
     method: "POST",

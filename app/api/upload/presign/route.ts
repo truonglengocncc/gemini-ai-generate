@@ -36,7 +36,7 @@ export async function POST(request: NextRequest) {
     const uploads = await Promise.all(
       files.map(async (file) => {
         const safeName = file.filename.replace(/[^a-zA-Z0-9._-]/g, "_");
-        const path = `${prefix}/${jobId}/upload/${safeName}`;
+        const path = `${prefix}/${jobId}/${safeName}`;
         const gcsFile = bucket.file(path);
         const [url] = await gcsFile.getSignedUrl({
           version: "v4",

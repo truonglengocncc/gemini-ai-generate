@@ -27,12 +27,13 @@ export async function POST(
       );
     }
 
-    // Enqueue worker to fetch results
+    // Enqueue worker to fetch results (pass output_gcs_prefix for docs_automatic so results go to .../gemini/)
     await submitFetchResultsToWorker(id, {
       job_id: id,
       batch_job_names: batchNames,
       request_keys: requestKeys,
       mode: "fetch_results",
+      output_gcs_prefix: config.output_gcs_prefix || undefined,
     });
 
     // Mark as processing while worker fetches
@@ -70,6 +71,8 @@ async function submitFetchResultsToWorker(jobId: string, payload: any) {
   const webhookUrl = process.env.WEBHOOK_URL || process.env.NEXT_PUBLIC_WEBHOOK_URL;
   const requestBody: any = { input: payload };
   if (webhookUrl) requestBody.webhook = webhookUrl;
+
+  console.log("[worker payload] check-batch (fetch_results)", JSON.stringify(requestBody));
 
   await fetch(runpodEndpoint, {
     method: "POST",
