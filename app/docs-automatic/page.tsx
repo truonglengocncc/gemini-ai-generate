@@ -128,7 +128,7 @@ export default function DocsAutomaticPage() {
     e.preventDefault();
     const { rows, errors } = parseSheet(sheetText.trim());
     if (rows.length === 0) {
-      alert(errors.length ? errors.join("\n") : "Paste a sheet with columns: FILE, Prompt, Images, Ratio, Variations, Resolution. Each row = one job.");
+      alert(errors.length ? errors.join("\n") : "Paste a sheet with columns: FILE, Prompt, Ratio, Variations, Resolution. Each row = one job.");
       return;
     }
 
@@ -153,7 +153,6 @@ export default function DocsAutomaticPage() {
             parsed: {
               prompt: row.prompt,
               prompts: expandPromptTemplate(row.prompt),
-              numImages: row.numImages,
               imageRatio: row.imageRatio,
               variationsPerImage: row.variationsPerImage,
               resolution: row.resolution,
@@ -193,7 +192,7 @@ export default function DocsAutomaticPage() {
             Docs Automatic Mode
           </h1>
           <p className="text-gray-600 dark:text-gray-400">
-            Paste a sheet (TSV/CSV) with columns: FILE, Prompt, Images, Ratio, Variations, Resolution. Each row = one generate job; GCS link from FILE column.
+            Paste a sheet (TSV/CSV) with columns: FILE, Prompt, Ratio, Variations, Resolution. Each row = one generate job; GCS link from FILE column.
           </p>
         </div>
 
@@ -259,7 +258,7 @@ export default function DocsAutomaticPage() {
               </div>
               <div className="flex-1">
                 <label className="block text-sm font-semibold text-gray-900 dark:text-gray-100">Sheet (paste from Excel / Google Sheets)</label>
-                <p className="text-xs text-gray-500 dark:text-gray-400">Columns: FILE (gs://... link), Prompt, Images, Ratio, Variations, Resolution. First row may be header. Each row = one generate job.</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400">Columns: FILE (gs://... link), Prompt, Ratio, Variations, Resolution. First row may be header. Each row = one generate job.</p>
               </div>
             </div>
             <div className="mb-4">
@@ -297,7 +296,6 @@ export default function DocsAutomaticPage() {
                       <th className="p-2 font-semibold">#</th>
                       <th className="p-2 font-semibold">FILE</th>
                       <th className="p-2 font-semibold">Prompt</th>
-                      <th className="p-2 font-semibold">Images</th>
                       <th className="p-2 font-semibold">Ratio</th>
                       <th className="p-2 font-semibold">Variations</th>
                       <th className="p-2 font-semibold">Resolution</th>
@@ -310,7 +308,6 @@ export default function DocsAutomaticPage() {
                         <td className="p-2">{idx + 1}</td>
                         <td className="p-2 font-mono text-xs max-w-[180px] truncate" title={row.file}>{row.file}</td>
                         <td className="p-2 max-w-[200px] truncate" title={row.prompt}>{row.prompt}</td>
-                        <td className="p-2">{row.numImages}</td>
                         <td className="p-2">{row.imageRatio}</td>
                         <td className="p-2">{row.variationsPerImage}</td>
                         <td className="p-2">{row.resolution}</td>
@@ -342,7 +339,6 @@ export default function DocsAutomaticPage() {
                             <div><span className="font-semibold text-gray-600 dark:text-gray-400">FILE:</span><br /><span className="font-mono text-xs break-all">{row.file}</span></div>
                             <div><span className="font-semibold text-gray-600 dark:text-gray-400">Prompt:</span><br /><span className="break-words">{row.prompt}</span></div>
                             <div className="grid grid-cols-2 gap-2">
-                              <div><span className="font-semibold text-gray-600 dark:text-gray-400">Images:</span> {row.numImages}</div>
                               <div><span className="font-semibold text-gray-600 dark:text-gray-400">Ratio:</span> {row.imageRatio}</div>
                               <div><span className="font-semibold text-gray-600 dark:text-gray-400">Variations:</span> {row.variationsPerImage}</div>
                               <div><span className="font-semibold text-gray-600 dark:text-gray-400">Resolution:</span> {row.resolution}</div>
