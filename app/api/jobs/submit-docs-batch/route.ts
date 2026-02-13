@@ -160,14 +160,12 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    const pathPrefix = gcsConfig.path_prefix || "gemini-generate";
-    const folderForWorker = fullPrefix.startsWith(pathPrefix) ? fullPrefix : `${pathPrefix}/${fullPrefix.replace(/^\/+/, "")}`;
-
+   
     const payload = {
       mode: "docs_automatic",
       groupId,
       jobId,
-      folder: folderForWorker,
+      folder: fullPrefix,
       prompts,
       prompt_template: parsed.prompt,
       config,
