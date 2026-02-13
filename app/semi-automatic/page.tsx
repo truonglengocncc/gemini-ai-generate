@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
+import { expandPromptTemplate } from "@/lib/promptExpand";
 
 interface Group {
   id: string;
@@ -185,8 +186,11 @@ useEffect(() => {
     return uploads.map((u: any) => u.publicUrl);
   };
 
-  // Calculate total images
-  const totalImages = refImages.length * prompts.reduce((sum, p) => sum + (p.countPerRef || 0), 0);
+  // Total images: each ref × (sum over prompts of expanded variants × countPerRef)
+  const totalImages = refImages.length * prompts.reduce(
+    (sum, p) => sum + expandPromptTemplate(p.text).length * (p.countPerRef || 0),
+    0
+  );
 
   const handleSubmit = async () => {
     if (refImages.length === 0) {
@@ -215,15 +219,18 @@ useEffect(() => {
       // Upload ref images to GCS
       await uploadRefImages(generatedJobId);
       
-      // Build prompts array and images_per_prompt mapping
+      // Build prompts array (with brace expansion) and images_per_prompt mapping
       const promptTexts: string[] = [];
       const imagesPerPrompt: Record<string, number> = {};
-      
-      validPrompts.forEach((p, promptIdx) => {
-        promptTexts.push(p.text);
-        // Each ref image will use this prompt to generate countPerRef images
-        refImages.forEach((_, refIdx) => {
-          imagesPerPrompt[`${refIdx}_${promptIdx}`] = p.countPerRef;
+      let promptIdx = 0;
+      validPrompts.forEach((p) => {
+        const expanded = expandPromptTemplate(p.text);
+        expanded.forEach((text) => {
+          promptTexts.push(text);
+          refImages.forEach((_, refIdx) => {
+            imagesPerPrompt[`${refIdx}_${promptIdx}`] = p.countPerRef;
+          });
+          promptIdx++;
         });
       });
 
@@ -527,6 +534,19 @@ useEffect(() => {
                         </button>
                       )}
                     </div>
+                    {expandPromptTemplate(prompt.text).length > 1 && (
+                      <div className="mt-2 text-xs text-purple-700 dark:text-purple-300 bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 rounded-lg p-2">
+                        <p className="font-medium">Detected {expandPromptTemplate(prompt.text).length} prompt variants from braces. Each variant is sent as a separate prompt.</p>
+                        <ul className="list-disc ml-4 mt-1 space-y-0.5">
+                          {expandPromptTemplate(prompt.text).slice(0, 3).map((p2, i) => (
+                            <li key={i} className="font-mono text-[11px] break-words">{p2}</li>
+                          ))}
+                          {expandPromptTemplate(prompt.text).length > 3 && (
+                            <li className="italic">...and {expandPromptTemplate(prompt.text).length - 3} more</li>
+                          )}
+                        </ul>
+                      </div>
+                    )}
                     <div className="flex items-center gap-3 p-2 bg-gradient-to-r from-green-50 to-blue-50 dark:from-green-900/20 dark:to-blue-900/20 rounded-lg">
                       <label className="text-xs font-medium text-gray-700 dark:text-gray-300">Images per ref:</label>
                       <input
@@ -538,7 +558,7 @@ useEffect(() => {
                         max="20"
                       />
                       <span className="text-xs font-medium text-gray-600 dark:text-gray-400">
-                        = {refImages.length} refs × {prompt.countPerRef} = <span className="text-green-600 dark:text-green-400 font-bold">{refImages.length * prompt.countPerRef}</span> images
+                        = {refImages.length} refs × {expandPromptTemplate(prompt.text).length} variants × {prompt.countPerRef} = <span className="text-green-600 dark:text-green-400 font-bold">{refImages.length * expandPromptTemplate(prompt.text).length * prompt.countPerRef}</span> images
                       </span>
                     </div>
                   </div>

@@ -143,6 +143,8 @@ export async function POST(request: NextRequest) {
       model: model || "gemini-3-pro-image-preview",
     };
 
+    const prompts = Array.isArray(parsed.prompts) && parsed.prompts.length > 0 ? parsed.prompts : [parsed.prompt];
+
     await prisma.job.create({
       data: {
         id: jobId,
@@ -150,7 +152,7 @@ export async function POST(request: NextRequest) {
         mode: "docs_semi_automatic",
         status: "queued",
         images: imageUrls,
-        prompts: [parsed.prompt],
+        prompts,
         config,
       },
     });
@@ -172,7 +174,7 @@ export async function POST(request: NextRequest) {
       groupId,
       jobId,
       folder: folderForWorker,
-      prompts: [parsed.prompt],
+      prompts,
       model: model || config.model,
       config,
     };

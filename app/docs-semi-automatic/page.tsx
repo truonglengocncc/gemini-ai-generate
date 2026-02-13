@@ -1,88 +1,82 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { parseSheet, type SheetRow } from "@/lib/sheetParse";
+import { expandPromptTemplate } from "@/lib/promptExpand";
 
-export type ParsedDocs = {
-  prompt: string;
-  numImages: number;
-  imageRatio: string;
-  variationsPerImage: number;
-  resolution: string;
-} | null;
-
-function parseDocsContent(text: string): ParsedDocs | null {
-  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-  let prompt = "";
-  let numImages = 1;
-  let imageRatio = "1:1";
-  let variationsPerImage = 1;
-  let resolution = "1K";
-
-  for (const line of lines) {
-    const colon = line.indexOf(":");
-    if (colon < 0) continue;
-    const key = line.slice(0, colon).trim();
-    const value = line.slice(colon + 1).trim();
-    if (/^Prompt$/i.test(key)) prompt = value;
-    else if (/^Number of Images$/i.test(key)) numImages = Math.max(1, parseInt(value, 10) || 1);
-    else if (/^Image Ratio$/i.test(key)) imageRatio = value || "1:1";
-    else if (/^Variations per Image$/i.test(key)) variationsPerImage = Math.max(1, parseInt(value, 10) || 1);
-    else if (/^Resolution$/i.test(key)) resolution = value || "1K";
-  }
-
-  if (!prompt) return null;
-  return { prompt, numImages, imageRatio, variationsPerImage, resolution };
-}
-
-const REQUIRED_DOCS_KEYS = ["Prompt", "Number of Images", "Image Ratio", "Variations per Image", "Resolution"] as const;
-
-function getMissingDocsVars(text: string): string[] {
-  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-  const found = new Set<string>();
-  for (const line of lines) {
-    const colon = line.indexOf(":");
-    if (colon < 0) continue;
-    const key = line.slice(0, colon).trim();
-    for (const required of REQUIRED_DOCS_KEYS) {
-      if (new RegExp(`^${required.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i").test(key)) {
-        found.add(required);
-        break;
-      }
-    }
-  }
-  return REQUIRED_DOCS_KEYS.filter((k) => !found.has(k));
-}
+const GOOGLE_SHEET_URL_REGEX = /docs\.google\.com\/spreadsheets\/d\/[a-zA-Z0-9_-]+/;
 
 export default function DocsSemiAutomaticPage() {
   const router = useRouter();
-  const [docsFile, setDocsFile] = useState<File | null>(null);
-  const [docsText, setDocsText] = useState("");
-  const [gcsInputPath, setGcsInputPath] = useState("");
-  const [parsed, setParsed] = useState<ParsedDocs | null>(null);
+  const [sheetText, setSheetText] = useState("");
+  const [reviewRows, setReviewRows] = useState<SheetRow[] | null>(null);
+  const [reviewErrors, setReviewErrors] = useState<string[]>([]);
+  const [showReview, setShowReview] = useState(false);
   const [groupId, setGroupId] = useState("");
   const [groupName, setGroupName] = useState("");
   const [groups, setGroups] = useState<Array<{ id: string; name: string; jobCount?: number }>>([]);
   const [groupsLoading, setGroupsLoading] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [jobId, setJobId] = useState<string | null>(null);
+  const [jobIds, setJobIds] = useState<string[]>([]);
   const [model, setModel] = useState("gemini-3-pro-image-preview");
-  const [googleDocsUrl, setGoogleDocsUrl] = useState("");
-  const [loadingGoogleDoc, setLoadingGoogleDoc] = useState(false);
+  const [googleSheetUrl, setGoogleSheetUrl] = useState("");
+  const [loadingSheet, setLoadingSheet] = useState(false);
+  const [viewRowIndex, setViewRowIndex] = useState<number | null>(null);
+  const autoLoadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const handleDocsChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      setDocsFile(file);
-      const reader = new FileReader();
-      reader.onload = () => setDocsText(String(reader.result ?? ""));
-      reader.readAsText(file);
+  const loadFromGoogleSheet = async (urlOverride?: string) => {
+    const url = (urlOverride ?? googleSheetUrl).trim();
+    if (!url) {
+      if (!urlOverride) alert("Please paste a Google Sheet link (e.g. https://docs.google.com/spreadsheets/d/.../edit)");
+      return;
+    }
+    if (!GOOGLE_SHEET_URL_REGEX.test(url)) return;
+    setLoadingSheet(true);
+    try {
+      const res = await fetch("/api/docs/fetch-sheet", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        alert(data.error || "Could not load sheet");
+        return;
+      }
+      const content = data.content ?? "";
+      setSheetText(content);
+      const { rows, errors } = parseSheet(content);
+      setReviewRows(rows);
+      setReviewErrors(errors);
+      setShowReview(true);
+    } catch (e) {
+      console.error(e);
+      alert("Error loading Google Sheet");
+    } finally {
+      setLoadingSheet(false);
     }
   };
 
   useEffect(() => {
-    setParsed(docsText ? parseDocsContent(docsText) : null);
-  }, [docsText]);
+    const url = googleSheetUrl.trim();
+    if (!url || !GOOGLE_SHEET_URL_REGEX.test(url)) return;
+    if (autoLoadTimerRef.current) clearTimeout(autoLoadTimerRef.current);
+    autoLoadTimerRef.current = setTimeout(() => {
+      autoLoadTimerRef.current = null;
+      loadFromGoogleSheet(url);
+    }, 700);
+    return () => {
+      if (autoLoadTimerRef.current) clearTimeout(autoLoadTimerRef.current);
+    };
+  }, [googleSheetUrl]);
+
+  const handleReviewSheet = () => {
+    const { rows, errors } = parseSheet(sheetText);
+    setReviewRows(rows);
+    setReviewErrors(errors);
+    setShowReview(true);
+  };
 
   const handleGroupNameChange = (value: string) => {
     setGroupName(value);
@@ -114,34 +108,6 @@ export default function DocsSemiAutomaticPage() {
     loadGroups();
   }, []);
 
-  const loadFromGoogleDoc = async () => {
-    const url = googleDocsUrl.trim();
-    if (!url) {
-      alert("Please paste a Google Docs link (e.g. https://docs.google.com/document/d/.../edit)");
-      return;
-    }
-    setLoadingGoogleDoc(true);
-    try {
-      const res = await fetch("/api/docs/fetch-google", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        alert(data.error || "Could not load content");
-        return;
-      }
-      setDocsText(data.content ?? "");
-      setDocsFile(null);
-    } catch (e) {
-      console.error(e);
-      alert("Error loading Google Docs");
-    } finally {
-      setLoadingGoogleDoc(false);
-    }
-  };
-
   const createGroup = async (name?: string) => {
     try {
       const response = await fetch("/api/groups", {
@@ -160,83 +126,57 @@ export default function DocsSemiAutomaticPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const pathTrimmed = gcsInputPath.trim();
-    if (!pathTrimmed) {
-      alert("Please enter GCS path (e.g. gs://capsure/gemini-generate/test_docs_generate/midjourney)");
+    const { rows, errors } = parseSheet(sheetText.trim());
+    if (rows.length === 0) {
+      alert(errors.length ? errors.join("\n") : "Paste a sheet with columns: FILE, Prompt, Images, Ratio, Variations, Resolution. Each row = one job.");
       return;
     }
 
     setLoading(true);
-    setJobId(null);
+    setJobIds([]);
     try {
-      let contentToUse = docsText.trim();
-      const urlTrimmed = googleDocsUrl.trim();
-      if (urlTrimmed) {
-        const res = await fetch("/api/docs/fetch-google", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ url: urlTrimmed }),
-        });
-        const data = await res.json();
-        if (!res.ok) {
-          alert(data.error || "Could not load document from link");
-          setLoading(false);
-          return;
-        }
-        contentToUse = data.content ?? "";
-      }
-      const resolvedParsed = contentToUse ? parseDocsContent(contentToUse) : parsed;
-      if (!resolvedParsed) {
-        alert("Please paste a Google Docs link, upload a file, or paste content with format: Prompt:, Number of Images:, ...");
-        setLoading(false);
-        return;
-      }
-      const missingVars = getMissingDocsVars(contentToUse);
-      if (missingVars.length > 0) {
-        alert("File is missing required variables:\n\n" + missingVars.join("\n") + "\n\nPlease add them in the correct format (e.g. Prompt: ..., Number of Images: 1, ...) and run again.");
-        setLoading(false);
-        return;
-      }
-
       let currentGroupId = groupId;
       if (!currentGroupId) {
         currentGroupId = await createGroup(groupName || undefined);
         if (!currentGroupId) throw new Error("Failed to create group");
       }
 
-      const response = await fetch("/api/jobs/submit-docs-semi", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          groupId: currentGroupId,
-          docsContent: contentToUse,
-          gcsInputPath: pathTrimmed,
-          parsed: {
-            prompt: resolvedParsed.prompt,
-            numImages: resolvedParsed.numImages,
-            imageRatio: resolvedParsed.imageRatio,
-            variationsPerImage: resolvedParsed.variationsPerImage,
-            resolution: resolvedParsed.resolution,
-          },
-          model,
-        }),
-      });
+      const submitted: string[] = [];
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i]!;
+        const response = await fetch("/api/jobs/submit-docs-semi", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            groupId: currentGroupId,
+            gcsInputPath: row.file,
+            parsed: {
+              prompt: row.prompt,
+              prompts: expandPromptTemplate(row.prompt),
+              numImages: row.numImages,
+              imageRatio: row.imageRatio,
+              variationsPerImage: row.variationsPerImage,
+              resolution: row.resolution,
+            },
+            model,
+          }),
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || `Job ${i + 1} failed`);
+        submitted.push(data.jobId);
+      }
 
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "Submit failed");
-
-      setJobId(data.jobId);
-      setDocsFile(null);
-      setDocsText("");
-      setParsed(null);
-      setGcsInputPath("");
+      setJobIds(submitted);
+      setSheetText("");
+      setReviewRows(null);
+      setReviewErrors([]);
+      setShowReview(false);
       setGroupName("");
-
-      setTimeout(() => router.push(`/jobs/${data.jobId}`), 1000);
+      setTimeout(() => router.push(`/jobs/${submitted[0]}`), 1000);
     } catch (error: unknown) {
       const err = error as { message?: string };
-      console.error("Failed to submit job:", error);
-      alert(err.message || "Failed to submit job");
+      console.error("Failed to submit jobs:", error);
+      alert(err.message || "Failed to submit jobs");
     } finally {
       setLoading(false);
     }
@@ -253,7 +193,7 @@ export default function DocsSemiAutomaticPage() {
             Docs Semi Automatic Mode
           </h1>
           <p className="text-gray-600 dark:text-gray-400">
-            Prompt and config from docs; input images from GCS folder (e.g. midjourney). Results saved to gemini folder at the same level, filenames with _gemini suffix.
+            Paste a sheet (TSV/CSV) with columns: FILE, Prompt, Images, Ratio, Variations, Resolution. Each row = one job; GCS link from FILE column. Results saved to gemini folder at same level.
           </p>
         </div>
 
@@ -266,7 +206,7 @@ export default function DocsSemiAutomaticPage() {
               </div>
               <div className="flex-1">
                 <label className="block text-sm font-semibold text-gray-900 dark:text-gray-100">Group</label>
-                <p className="text-xs text-gray-500 dark:text-gray-400">Select an existing group or enter a new name</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400">Select an existing group or enter a new group name (all jobs in the sheet share one group)</p>
               </div>
               <button
                 type="button"
@@ -311,25 +251,127 @@ export default function DocsSemiAutomaticPage() {
             </div>
           </div>
 
-          {/* GCS path */}
+          {/* Sheet paste */}
           <div className="bg-white dark:bg-zinc-900 rounded-xl shadow-lg border border-gray-200 dark:border-zinc-800 p-6">
             <div className="flex items-center gap-3 mb-4">
-              <div className="w-10 h-10 bg-blue-100 dark:bg-blue-900/30 rounded-lg flex items-center justify-center">
-                <span className="text-xl">📁</span>
+              <div className="w-10 h-10 bg-teal-100 dark:bg-teal-900/30 rounded-lg flex items-center justify-center">
+                <span className="text-xl">📋</span>
               </div>
-              <div>
-                <label className="block text-sm font-semibold text-gray-900 dark:text-gray-100">GCS path (input images)</label>
-                <p className="text-xs text-gray-500 dark:text-gray-400">Folder containing input images (e.g. gs://capsure/gemini-generate/test_docs_generate/midjourney). Results are saved to a gemini folder at the same level.</p>
+              <div className="flex-1">
+                <label className="block text-sm font-semibold text-gray-900 dark:text-gray-100">Sheet (paste from Excel / Google Sheets)</label>
+                <p className="text-xs text-gray-500 dark:text-gray-400">Columns: FILE (gs://... link), Prompt, Images, Ratio, Variations, Resolution. First row may be header. Each row = one generate job.</p>
               </div>
             </div>
-            <input
-              type="text"
-              value={gcsInputPath}
-              onChange={(e) => setGcsInputPath(e.target.value)}
-              placeholder="gs://capsure/gemini-generate/test_docs_generate/midjourney"
-              className="w-full p-3 border-2 border-gray-200 dark:border-zinc-700 rounded-lg bg-gray-50 dark:bg-zinc-800/50 focus:border-blue-500"
-              disabled={loading}
-            />
+            <div className="mb-4">
+              <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 mb-1">Or load from Google Sheet URL</label>
+              <div className="flex gap-2">
+                <input
+                  type="url"
+                  value={googleSheetUrl}
+                  onChange={(e) => setGoogleSheetUrl(e.target.value)}
+                  placeholder="https://docs.google.com/spreadsheets/d/.../edit"
+                  className="flex-1 p-3 border-2 border-gray-200 dark:border-zinc-700 rounded-lg bg-gray-50 dark:bg-zinc-800/50 focus:border-teal-500"
+                  disabled={loading}
+                />
+                <button
+                  type="button"
+                  onClick={() => loadFromGoogleSheet()}
+                  disabled={loading || loadingSheet}
+                  className="px-4 py-2 bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white rounded-lg font-medium whitespace-nowrap flex items-center gap-2"
+                >
+                  {loadingSheet ? (
+                    <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                  ) : null}
+                  Load
+                </button>
+              </div>
+            </div>
+            {showReview && reviewRows !== null && (
+              <div className="mt-4 overflow-x-auto rounded-lg border border-gray-200 dark:border-zinc-700 max-h-80 overflow-y-auto">
+                <table className="w-full text-left text-sm">
+                  <thead className="bg-gray-100 dark:bg-zinc-800 sticky top-0">
+                    <tr>
+                      <th className="p-2 font-semibold">#</th>
+                      <th className="p-2 font-semibold">FILE</th>
+                      <th className="p-2 font-semibold">Prompt</th>
+                      <th className="p-2 font-semibold">Images</th>
+                      <th className="p-2 font-semibold">Ratio</th>
+                      <th className="p-2 font-semibold">Variations</th>
+                      <th className="p-2 font-semibold">Resolution</th>
+                      <th className="p-2 font-semibold w-20"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {reviewRows.map((row, idx) => (
+                      <tr key={idx} className="border-t border-gray-200 dark:border-zinc-700">
+                        <td className="p-2">{idx + 1}</td>
+                        <td className="p-2 font-mono text-xs max-w-[180px] truncate" title={row.file}>{row.file}</td>
+                        <td className="p-2 max-w-[200px] truncate" title={row.prompt}>{row.prompt}</td>
+                        <td className="p-2">{row.numImages}</td>
+                        <td className="p-2">{row.imageRatio}</td>
+                        <td className="p-2">{row.variationsPerImage}</td>
+                        <td className="p-2">{row.resolution}</td>
+                        <td className="p-2">
+                          <button
+                            type="button"
+                            onClick={() => setViewRowIndex(idx)}
+                            className="cursor-pointer text-xs px-2 py-1 rounded border border-teal-300 dark:border-teal-700 text-teal-700 dark:text-teal-300 hover:bg-teal-50 dark:hover:bg-teal-900/30"
+                          >
+                            View
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {viewRowIndex !== null && reviewRows[viewRowIndex] && (
+                  <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={() => setViewRowIndex(null)}>
+                    <div className="bg-white dark:bg-zinc-900 rounded-xl shadow-xl border border-gray-200 dark:border-zinc-700 max-w-lg w-full max-h-[90vh] overflow-y-auto p-6" onClick={(e) => e.stopPropagation()}>
+                      <div className="flex items-center justify-between mb-4">
+                        <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Row {viewRowIndex + 1} details</h3>
+                        <button type="button" onClick={() => setViewRowIndex(null)} className="cursor-pointer text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 p-1">✕</button>
+                      </div>
+                      {(() => {
+                        const row = reviewRows[viewRowIndex]!;
+                        const expanded = expandPromptTemplate(row.prompt);
+                        return (
+                          <div className="space-y-4 text-sm">
+                            <div><span className="font-semibold text-gray-600 dark:text-gray-400">FILE:</span><br /><span className="font-mono text-xs break-all">{row.file}</span></div>
+                            <div><span className="font-semibold text-gray-600 dark:text-gray-400">Prompt:</span><br /><span className="break-words">{row.prompt}</span></div>
+                            <div className="grid grid-cols-2 gap-2">
+                              <div><span className="font-semibold text-gray-600 dark:text-gray-400">Images:</span> {row.numImages}</div>
+                              <div><span className="font-semibold text-gray-600 dark:text-gray-400">Ratio:</span> {row.imageRatio}</div>
+                              <div><span className="font-semibold text-gray-600 dark:text-gray-400">Variations:</span> {row.variationsPerImage}</div>
+                              <div><span className="font-semibold text-gray-600 dark:text-gray-400">Resolution:</span> {row.resolution}</div>
+                            </div>
+                            {expanded.length > 1 ? (
+                              <div className="text-xs text-purple-700 dark:text-purple-300 bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 rounded-lg p-3">
+                                <p className="font-medium mb-2">Detected {expanded.length} prompt variants from braces. Assigned to images in order (round-robin).</p>
+                                <ul className="list-disc ml-4 space-y-1">
+                                  {expanded.map((p, i) => (
+                                    <li key={i} className="font-mono text-[11px] break-words">{p}</li>
+                                  ))}
+                                </ul>
+                              </div>
+                            ) : null}
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  </div>
+                )}
+                {reviewErrors.length > 0 && (
+                  <div className="p-3 bg-amber-50 dark:bg-amber-900/20 text-amber-800 dark:text-amber-200 text-xs border-t border-amber-200 dark:border-amber-800">
+                    {reviewErrors.map((err, i) => (
+                      <div key={i}>{err}</div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Model */}
@@ -346,80 +388,9 @@ export default function DocsSemiAutomaticPage() {
             </select>
           </div>
 
-          {/* Docs content */}
-          <div className="bg-white dark:bg-zinc-900 rounded-xl shadow-lg border border-gray-200 dark:border-zinc-800 p-6">
-            <div className="flex items-center gap-3 mb-4">
-              <div className="w-10 h-10 bg-teal-100 dark:bg-teal-900/30 rounded-lg flex items-center justify-center">
-                <span className="text-xl">📄</span>
-              </div>
-              <div>
-                <label className="block text-sm font-semibold text-gray-900 dark:text-gray-100">Docs content</label>
-                <p className="text-xs text-gray-500 dark:text-gray-400">Google Docs link, upload file, or paste content. Format: Prompt:, Number of Images:, Image Ratio:, Variations per Image:, Resolution:</p>
-              </div>
-            </div>
-
-            <div className="mb-4">
-              <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 mb-1">Link Google Docs</label>
-              <div className="flex gap-2">
-                <input
-                  type="url"
-                  value={googleDocsUrl}
-                  onChange={(e) => setGoogleDocsUrl(e.target.value)}
-                  placeholder="https://docs.google.com/document/d/.../edit"
-                  className="flex-1 p-3 border-2 border-gray-200 dark:border-zinc-700 rounded-lg bg-gray-50 dark:bg-zinc-800/50 focus:border-teal-500"
-                  disabled={loading}
-                />
-                <button
-                  type="button"
-                  onClick={loadFromGoogleDoc}
-                  disabled={loading || loadingGoogleDoc}
-                  className="px-4 py-2 bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white rounded-lg font-medium whitespace-nowrap flex items-center gap-2"
-                >
-                  {loadingGoogleDoc ? (
-                    <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                    </svg>
-                  ) : null}
-                  Load content
-                </button>
-              </div>
-            </div>
-
-            <div className="mb-3">
-              <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 mb-1">Or upload file</label>
-              <input
-                type="file"
-                accept=".txt,.md,text/*"
-                onChange={handleDocsChange}
-                className="w-full p-3 border-2 border-dashed border-gray-300 dark:border-zinc-700 rounded-lg bg-gray-50 dark:bg-zinc-800/50"
-                disabled={loading}
-              />
-            </div>
-
-            <textarea
-              value={docsText}
-              onChange={(e) => setDocsText(e.target.value)}
-              className="w-full p-4 border-2 border-gray-200 dark:border-zinc-700 rounded-lg bg-gray-50 dark:bg-zinc-800/50 focus:border-teal-500 resize-none"
-              rows={6}
-              placeholder={'Prompt: Transform the background...\nNumber of Images: 1\nImage Ratio: 1:1\nVariations per Image: 1\nResolution: 1K'}
-              disabled={loading}
-            />
-            {parsed && (
-              <div className="mt-3 p-3 bg-teal-50 dark:bg-teal-900/20 rounded-lg text-sm">
-                <p className="font-medium text-gray-900 dark:text-gray-100">Parsed:</p>
-                <p>Prompt: {parsed.prompt.slice(0, 80)}{parsed.prompt.length > 80 ? "…" : ""}</p>
-                <p>Number of Images: {parsed.numImages} · Ratio: {parsed.imageRatio} · Variations: {parsed.variationsPerImage} · Resolution: {parsed.resolution}</p>
-              </div>
-            )}
-            {docsText && !parsed && (
-              <p className="mt-2 text-xs text-amber-600">No &quot;Prompt: ...&quot; line found. Check file format.</p>
-            )}
-          </div>
-
           <button
             type="submit"
-            disabled={loading || !gcsInputPath.trim() || (!docsText.trim() && !googleDocsUrl.trim())}
+            disabled={loading || !sheetText.trim() || (reviewRows !== null && reviewRows.length === 0)}
             className="w-full py-4 bg-gradient-to-r from-teal-600 to-cyan-600 hover:from-teal-700 hover:to-cyan-700 text-white font-semibold rounded-xl shadow-lg hover:shadow-xl transform hover:scale-[1.02] transition-all disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none flex items-center justify-center gap-2"
           >
             {loading ? (
@@ -428,28 +399,28 @@ export default function DocsSemiAutomaticPage() {
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
                 </svg>
-                Processing...
+                Submitting {reviewRows?.length ?? 0} job(s)...
               </>
             ) : (
               <>
                 <span className="text-xl">✨</span>
-                Run Docs Semi Automatic
+                Run Docs Semi Automatic{reviewRows && reviewRows.length > 0 ? ` (${reviewRows.length} job(s))` : ""}
               </>
             )}
           </button>
         </form>
 
-        {jobId && (
+        {jobIds.length > 0 && (
           <div className="mt-6 p-6 bg-gradient-to-r from-teal-50 to-cyan-50 dark:from-teal-900/20 dark:to-cyan-900/20 rounded-xl border-2 border-teal-200 dark:border-teal-800 shadow-lg">
             <div className="flex items-start gap-4">
               <div className="w-12 h-12 bg-green-500 rounded-full flex items-center justify-center shrink-0">
                 <span className="text-2xl">✓</span>
               </div>
               <div className="flex-1">
-                <p className="text-lg font-bold text-gray-900 dark:text-gray-100 mb-1">Job submitted successfully</p>
-                <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">Redirecting to job page...</p>
+                <p className="text-lg font-bold text-gray-900 dark:text-gray-100 mb-1">Submitted {jobIds.length} job(s)</p>
+                <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">Redirecting to first job...</p>
                 <button
-                  onClick={() => router.push(`/jobs/${jobId}`)}
+                  onClick={() => router.push(`/jobs/${jobIds[0]}`)}
                   className="px-6 py-2.5 bg-gradient-to-r from-teal-600 to-cyan-600 hover:from-teal-700 hover:to-cyan-700 text-white rounded-lg font-medium"
                 >
                   View job
