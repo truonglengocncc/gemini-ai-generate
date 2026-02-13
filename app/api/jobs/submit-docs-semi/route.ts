@@ -67,7 +67,7 @@ export async function POST(request: NextRequest) {
     const parsed = parsedFromClient || (docsContent ? parseDocsContent(docsContent) : null);
     if (!parsed) {
       return NextResponse.json(
-        { error: "Missing or invalid docs: provide docsContent or parsed (prompt, numImages, imageRatio, variationsPerImage, resolution)" },
+        { error: "Missing or invalid docs: provide docsContent or parsed (prompt, imageRatio, variationsPerImage, resolution)" },
         { status: 400 }
       );
     }

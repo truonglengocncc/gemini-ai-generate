@@ -1,11 +1,10 @@
 /**
- * Parse bulk job sheet: TSV/CSV with columns FILE, Prompt, Images, Ratio, Variations, Resolution.
- * Each row = one generate job. Paste from Excel/Google Sheets (tab-separated).
+ * Parse bulk job sheet: TSV/CSV with columns FILE, Prompt, Ratio, Variations, Resolution.
+ * Each row = one generate job. Total images = Variations × (ratio expansion) × (prompt expansion).
  */
 export type SheetRow = {
   file: string;
   prompt: string;
-  numImages: number;
   imageRatio: string;
   variationsPerImage: number;
   resolution: string;
@@ -13,7 +12,6 @@ export type SheetRow = {
 
 const COL_FILE = "file";
 const COL_PROMPT = "prompt";
-const COL_IMAGES = "images";
 const COL_RATIO = "ratio";
 const COL_VARIATIONS = "variations";
 const COL_RESOLUTION = "resolution";
@@ -23,8 +21,6 @@ const HEADER_ALIASES: Record<string, string> = {
   "gcs path": COL_FILE,
   "gcs": COL_FILE,
   prompt: COL_PROMPT,
-  "number of images": COL_IMAGES,
-  images: COL_IMAGES,
   ratio: COL_RATIO,
   "aspect ratio": COL_RATIO,
   variations: COL_VARIATIONS,
@@ -42,7 +38,7 @@ function normalizeHeader(h: string): string {
 /** Return true if the first row looks like column headers (not data). */
 function isHeaderRow(cells: string[], normalized: string[]): boolean {
   if (cells.length < 2) return false;
-  const known = [COL_FILE, COL_PROMPT, COL_IMAGES, COL_RATIO, COL_VARIATIONS, COL_RESOLUTION];
+  const known = [COL_FILE, COL_PROMPT, COL_RATIO, COL_VARIATIONS, COL_RESOLUTION];
   const hasKnown = normalized.some((k) => known.includes(k));
   if (!hasKnown) return false;
   const allShortAndNoPath = cells.every((c, i) => {
@@ -140,24 +136,22 @@ export function parseSheet(text: string): { rows: SheetRow[]; errors: string[] }
   if (looksLikeHeader) {
     normalizedFirst.forEach((key, i) => {
       const col = HEADER_ALIASES[key] ?? key;
-      if ([COL_FILE, COL_PROMPT, COL_IMAGES, COL_RATIO, COL_VARIATIONS, COL_RESOLUTION].includes(col)) {
+      if ([COL_FILE, COL_PROMPT, COL_RATIO, COL_VARIATIONS, COL_RESOLUTION].includes(col)) {
         colIndex[col] = i;
       }
     });
     colIndex[COL_FILE] = colIndex[COL_FILE] ?? 0;
     colIndex[COL_PROMPT] = colIndex[COL_PROMPT] ?? 1;
-    colIndex[COL_IMAGES] = colIndex[COL_IMAGES] ?? 2;
-    colIndex[COL_RATIO] = colIndex[COL_RATIO] ?? 3;
-    colIndex[COL_VARIATIONS] = colIndex[COL_VARIATIONS] ?? 4;
-    colIndex[COL_RESOLUTION] = colIndex[COL_RESOLUTION] ?? 5;
+    colIndex[COL_RATIO] = colIndex[COL_RATIO] ?? 2;
+    colIndex[COL_VARIATIONS] = colIndex[COL_VARIATIONS] ?? 3;
+    colIndex[COL_RESOLUTION] = colIndex[COL_RESOLUTION] ?? 4;
     startIndex = 1;
   } else {
     colIndex[COL_FILE] = 0;
     colIndex[COL_PROMPT] = 1;
-    colIndex[COL_IMAGES] = 2;
-    colIndex[COL_RATIO] = 3;
-    colIndex[COL_VARIATIONS] = 4;
-    colIndex[COL_RESOLUTION] = 5;
+    colIndex[COL_RATIO] = 2;
+    colIndex[COL_VARIATIONS] = 3;
+    colIndex[COL_RESOLUTION] = 4;
   }
 
   const rows: SheetRow[] = [];
@@ -172,7 +166,6 @@ export function parseSheet(text: string): { rows: SheetRow[]; errors: string[] }
     rows.push({
       file,
       prompt,
-      numImages: parseNumber(cells[colIndex[COL_IMAGES]], 1),
       imageRatio: parseRatio(cells[colIndex[COL_RATIO]] ?? "1:1"),
       variationsPerImage: parseNumber(cells[colIndex[COL_VARIATIONS]], 1),
       resolution: parseResolution(cells[colIndex[COL_RESOLUTION]] ?? "2K"),
