@@ -72,12 +72,15 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const inputPath = (gcsInputPath || "").trim();
+    let inputPath = (gcsInputPath || "").trim();
     if (!inputPath) {
       return NextResponse.json(
         { error: "Missing gcsInputPath (e.g. gs://capsure/gemini-generate/test_docs_generate/midjourney)" },
         { status: 400 }
       );
+    }
+    if (!inputPath.startsWith("gs://")) {
+      inputPath = "gs://" + inputPath.replace(/^\/+/, "");
     }
 
     if (!groupId) {
@@ -166,14 +169,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "RUNPOD_ENDPOINT not configured" }, { status: 500 });
     }
 
-    const pathPrefix = gcsConfig.path_prefix || "gemini-generate";
-    const folderForWorker = fullPrefix.startsWith(pathPrefix) ? fullPrefix : `${pathPrefix}/${fullPrefix.replace(/^\/+/, "")}`;
-
     const payload: Record<string, unknown> = {
       mode: "docs_semi_automatic",
       groupId,
       jobId,
-      folder: folderForWorker,
+      folder: fullPrefix,
       prompts,
       model: model || config.model,
       config,

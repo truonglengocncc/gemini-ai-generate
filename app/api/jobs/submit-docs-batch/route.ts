@@ -77,12 +77,16 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const inputPath = (gcsInputPath || "").trim();
+    let inputPath = (gcsInputPath || "").trim();
     if (!inputPath) {
       return NextResponse.json(
         { error: "Missing gcsInputPath (e.g. gs://capsure/gemini-generate/test_docs_generate/midjourney)" },
         { status: 400 }
       );
+    }
+    // Nếu FILE không có gs:// phía trước thì thêm vào rồi mới xử lý
+    if (!inputPath.startsWith("gs://")) {
+      inputPath = "gs://" + inputPath.replace(/^\/+/, "");
     }
 
     if (!groupId) {
