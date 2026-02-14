@@ -584,9 +584,16 @@ async def handle_docs_semi_automatic_mode(input_data: Dict[str, Any]) -> Dict[st
 
     gcs_client = initialize_gcs_client(gcs_config)
     bucket_name = gcs_config.get("bucket_name")
-    print(f"[Docs-Semi] Listing files from: {folder_path}, output prefix: {output_gcs_prefix}")
-    image_urls = await list_files_from_gcs_folder(gcs_client, bucket_name, folder_path, gcs_config)
-    print(f"[Docs-Semi] Found {len(image_urls)} files, {len(prompts)} prompts")
+
+    # Prefer pre-supplied image_urls from Next.js (avoids re-listing GCS with potentially different filters)
+    image_urls = input_data.get("image_urls") or []
+    if image_urls:
+        print(f"[Docs-Semi] Using {len(image_urls)} pre-supplied image URLs, output prefix: {output_gcs_prefix}")
+    else:
+        print(f"[Docs-Semi] No pre-supplied URLs, listing files from: {folder_path}, output prefix: {output_gcs_prefix}")
+        image_urls = await list_files_from_gcs_folder(gcs_client, bucket_name, folder_path, gcs_config)
+        print(f"[Docs-Semi] Found {len(image_urls)} files from GCS listing")
+    print(f"[Docs-Semi] Total images: {len(image_urls)}, {len(prompts)} prompts")
     if not image_urls:
         return {"status": "failed", "error": "No images found", "results": [], "total": 0, "refresh_worker": True}
 

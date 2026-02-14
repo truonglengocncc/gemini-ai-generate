@@ -113,9 +113,14 @@ export async function POST(request: NextRequest) {
     const [files] = await bucket.getFiles({ prefix });
 
     const imageExtensions = [".jpg", ".jpeg", ".png", ".webp"];
-    const blobList = files.filter(
-      (f) => !f.name.endsWith("/") && imageExtensions.some((ext) => f.name.toLowerCase().endsWith(ext))
-    );
+    const blobList = files.filter((f) => {
+      if (f.name.endsWith("/")) return false;
+      if (!imageExtensions.some((ext) => f.name.toLowerCase().endsWith(ext))) return false;
+      // Exclude generated images (labeled _gemini) — consistent with worker filter
+      const fname = f.name.split("/").pop() || "";
+      if (fname.includes("_gemini")) return false;
+      return true;
+    });
 
     if (blobList.length === 0) {
       return NextResponse.json(
@@ -175,6 +180,7 @@ export async function POST(request: NextRequest) {
       jobId,
       folder: fullPrefix,
       prompts,
+      image_urls: imageUrls,
       model: model || config.model,
       config,
     };

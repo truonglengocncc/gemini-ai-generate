@@ -72,7 +72,7 @@ export default function Home() {
             className="bg-white dark:bg-zinc-900 p-8 rounded-xl border-2 border-zinc-200 dark:border-zinc-800 hover:border-purple-500 transition-all hover:shadow-lg"
           >
             <div className="text-4xl mb-4">📄</div>
-            <h2 className="text-2xl font-semibold mb-3">Docs Semi Automatic Mode</h2>
+            <h2 className="text-2xl font-semibold mb-3">Docs Semi-Automatic Mode</h2>
             <p className="text-zinc-600 dark:text-zinc-400 mb-4">
               Same as Semi-Automatic: config from docs, images from GCS. Generated images saved to the same GCS folder as the source images.
             </p>
