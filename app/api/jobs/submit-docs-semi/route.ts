@@ -51,11 +51,11 @@ function parseGsUrl(inputPath: string): { bucket: string; path: string } | null 
   return bucket && path ? { bucket, path } : null;
 }
 
-/** Output folder = same path as input but last segment replaced by "gemini" (e.g. .../midjourney -> .../gemini). */
+/** Output folder = input path + /gemini subfolder (e.g. .../mirror_selfie -> .../mirror_selfie/gemini). */
 function outputPrefixFromInputPath(inputPath: string): string {
   const parts = inputPath.replace(/\/+$/, "").split("/").filter(Boolean);
   if (parts.length === 0) return "gemini";
-  parts[parts.length - 1] = "gemini";
+  parts.push("gemini");
   return parts.join("/");
 }
 
@@ -72,12 +72,15 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const inputPath = (gcsInputPath || "").trim();
+    let inputPath = (gcsInputPath || "").trim();
     if (!inputPath) {
       return NextResponse.json(
         { error: "Missing gcsInputPath (e.g. gs://capsure/gemini-generate/test_docs_generate/midjourney)" },
         { status: 400 }
       );
+    }
+    if (!inputPath.startsWith("gs://")) {
+      inputPath = "gs://" + inputPath.replace(/^\/+/, "");
     }
 
     if (!groupId) {
@@ -110,9 +113,14 @@ export async function POST(request: NextRequest) {
     const [files] = await bucket.getFiles({ prefix });
 
     const imageExtensions = [".jpg", ".jpeg", ".png", ".webp"];
-    const blobList = files.filter(
-      (f) => !f.name.endsWith("/") && imageExtensions.some((ext) => f.name.toLowerCase().endsWith(ext))
-    );
+    const blobList = files.filter((f) => {
+      if (f.name.endsWith("/")) return false;
+      if (!imageExtensions.some((ext) => f.name.toLowerCase().endsWith(ext))) return false;
+      // Exclude generated images (labeled _gemini) — consistent with worker filter
+      const fname = f.name.split("/").pop() || "";
+      if (fname.includes("_gemini")) return false;
+      return true;
+    });
 
     if (blobList.length === 0) {
       return NextResponse.json(
@@ -126,7 +134,7 @@ export async function POST(request: NextRequest) {
       (f) => `https://storage.googleapis.com/${bucketName}/${f.name}`
     );
 
-    // Output to .../gemini/ (same level as input folder, e.g. midjourney -> gemini)
+    // Output to .../input_folder/gemini/ (subfolder inside input folder, e.g. mirror_selfie -> mirror_selfie/gemini)
     const output_gcs_prefix = outputPrefixFromInputPath(fullPrefix);
 
     const imagesPerPrompt: Record<string, number> = {};
@@ -166,15 +174,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "RUNPOD_ENDPOINT not configured" }, { status: 500 });
     }
 
-    const pathPrefix = gcsConfig.path_prefix || "gemini-generate";
-    const folderForWorker = fullPrefix.startsWith(pathPrefix) ? fullPrefix : `${pathPrefix}/${fullPrefix.replace(/^\/+/, "")}`;
-
     const payload: Record<string, unknown> = {
       mode: "docs_semi_automatic",
       groupId,
       jobId,
-      folder: folderForWorker,
+      folder: fullPrefix,
       prompts,
+      image_urls: imageUrls,
       model: model || config.model,
       config,
     };
