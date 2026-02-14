@@ -559,9 +559,9 @@ async def handle_semi_automatic_mode(input_data: Dict[str, Any]) -> Dict[str, An
 
 async def handle_docs_semi_automatic_mode(input_data: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Same generation as semi-automatic, but images are saved only under output_gcs_prefix
-    with flat filenames: .../gemini/gemini-gen_{img_idx}_{ts}_{prompt_idx}_{gen_idx}_gemini.jpg
-    No job_id/processed/semi-auto subfolders.
+    Same generation as semi-automatic, but images are saved under output_gcs_prefix
+    (input_folder/gemini/) with flat filenames: .../input_folder/gemini/gemini-gen_{img_idx}_{ts}_{prompt_idx}_{gen_idx}_gemini.jpg
+    Each input folder gets its own gemini/ subfolder.
     """
     folder_path = input_data.get("folder")
     prompts = input_data.get("prompts", [])

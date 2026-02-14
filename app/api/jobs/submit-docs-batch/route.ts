@@ -4,7 +4,7 @@ import { Storage } from "@google-cloud/storage";
 
 /**
  * Docs Automatic Mode: prompt/config from docs, images from GCS folder.
- * Results saved to .../gemini/ (same level as input folder, e.g. midjourney -> gemini).
+ * Results saved to .../input_folder/gemini/ (subfolder inside input folder, e.g. mirror_selfie -> mirror_selfie/gemini).
  */
 function parseDocsContent(text: string): {
   prompt: string;
@@ -57,10 +57,11 @@ function parseGsUrl(inputPath: string): { bucket: string; path: string } | null 
   return bucket && path ? { bucket, path } : null;
 }
 
+/** Output folder = input path + /gemini subfolder (e.g. .../mirror_selfie -> .../mirror_selfie/gemini). */
 function outputPrefixFromInputPath(inputPath: string): string {
   const parts = inputPath.replace(/\/+$/, "").split("/").filter(Boolean);
   if (parts.length === 0) return "gemini";
-  parts[parts.length - 1] = "gemini";
+  parts.push("gemini");
   return parts.join("/");
 }
 
@@ -132,7 +133,7 @@ export async function POST(request: NextRequest) {
     const jobId = `job_docs_auto_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
     const imageUrls = blobList.map((f) => `https://storage.googleapis.com/${bucketName}/${f.name}`);
 
-    // Output to .../gemini/ (same level as input folder)
+    // Output to .../input_folder/gemini/ (subfolder inside input folder)
     const output_gcs_prefix = outputPrefixFromInputPath(fullPrefix);
 
     const runpodEndpoint = process.env.RUNPOD_ENDPOINT;

@@ -51,11 +51,11 @@ function parseGsUrl(inputPath: string): { bucket: string; path: string } | null 
   return bucket && path ? { bucket, path } : null;
 }
 
-/** Output folder = same path as input but last segment replaced by "gemini" (e.g. .../midjourney -> .../gemini). */
+/** Output folder = input path + /gemini subfolder (e.g. .../mirror_selfie -> .../mirror_selfie/gemini). */
 function outputPrefixFromInputPath(inputPath: string): string {
   const parts = inputPath.replace(/\/+$/, "").split("/").filter(Boolean);
   if (parts.length === 0) return "gemini";
-  parts[parts.length - 1] = "gemini";
+  parts.push("gemini");
   return parts.join("/");
 }
 
@@ -134,7 +134,7 @@ export async function POST(request: NextRequest) {
       (f) => `https://storage.googleapis.com/${bucketName}/${f.name}`
     );
 
-    // Output to .../gemini/ (same level as input folder, e.g. midjourney -> gemini)
+    // Output to .../input_folder/gemini/ (subfolder inside input folder, e.g. mirror_selfie -> mirror_selfie/gemini)
     const output_gcs_prefix = outputPrefixFromInputPath(fullPrefix);
 
     const imagesPerPrompt: Record<string, number> = {};
